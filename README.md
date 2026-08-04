@@ -1,1 +1,1 @@
-# Finzen-companion
+# finzen-companion
