@@ -158,6 +158,33 @@ def grafico_salud_financiera(puntaje):
     return fig
 
 
+def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, tasa_ahorro_ant,
+                             comp_actual, comp_anterior, categoria_top):
+    """Narra los números del mes en 2-3 frases, en español simple. Todo lo que
+    dice sale directo de los datos reales del usuario — no interpreta causas
+    ('gastaste más porque...'), no da consejos, solo describe lo que pasó."""
+    frases = []
+
+    if total_ingreso == 0 and total_gasto == 0:
+        return "Todavía no hay suficientes movimientos este mes para armar un resumen."
+
+    frases.append(f"Este mes llevas ${total_ingreso:,.0f} de ingresos y ${total_gasto:,.0f} de gastos, "
+                   f"con un balance {'positivo' if balance >= 0 else 'negativo'} de ${abs(balance):,.0f}.")
+
+    if tasa_ahorro_ant is not None and total_ingreso > 0:
+        diferencia_pp = (tasa_ahorro - tasa_ahorro_ant) * 100
+        if abs(diferencia_pp) >= 3:
+            direccion = "subió" if diferencia_pp > 0 else "bajó"
+            frases.append(f"Tu tasa de ahorro {direccion} de {tasa_ahorro_ant*100:.0f}% a {tasa_ahorro*100:.0f}% respecto al mes pasado.")
+
+    if categoria_top:
+        nombre_top, monto_top = categoria_top
+        pct_del_total = (monto_top / total_gasto * 100) if total_gasto > 0 else 0
+        frases.append(f"{icono_categoria(nombre_top)} Tu mayor gasto fue **{nombre_top}**, con ${monto_top:,.0f} ({pct_del_total:.0f}% del total).")
+
+    return " ".join(frases)
+
+
 # ============================================================
 # CONFIGURACIÓN — reemplaza antes de producción
 # ============================================================
@@ -369,6 +396,7 @@ elif not st.session_state["user"]:
     st.sidebar.markdown("#### Inicia sesión o crea tu cuenta")
     correo = st.sidebar.text_input("Correo")
     clave = st.sidebar.text_input("Contraseña", type="password")
+    acepta_terminos = st.sidebar.checkbox("Acepto los Términos de Servicio y el Aviso de Privacidad (pestaña ⚖️ Legal)")
     c1, c2 = st.sidebar.columns(2)
     with c1:
         if st.button("Entrar"):
@@ -385,7 +413,9 @@ elif not st.session_state["user"]:
                 st.sidebar.error("Ingresa correo y contraseña.")
     with c2:
         if st.button("Crear cuenta"):
-            if correo and clave:
+            if not acepta_terminos:
+                st.sidebar.error("Debes aceptar los Términos y el Aviso de Privacidad para crear una cuenta.")
+            elif correo and clave:
                 user, err = sign_up(correo, clave)
                 if user:
                     st.sidebar.success("Cuenta creada. Inicia sesión.")
@@ -470,7 +500,7 @@ def cargar_categorias(email):
 
 hogar = obtener_hogar(email) if supabase else None
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación Financiera", "🏠 Mi Hogar"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación Financiera", "🏠 Mi Hogar", "⚖️ Legal"])
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
@@ -570,6 +600,17 @@ with tab1:
         if balance > 0 and puntaje_salud >= 75 and not st.session_state.get(clave_celebracion):
             st.balloons()
             st.session_state[clave_celebracion] = True
+
+        # --- Resumen narrado: 2-3 frases en español simple, sin gráficos que interpretar ---
+        total_ingreso_ant = df_mes_ant[df_mes_ant["categoria"].isin(ingreso_categorias)]["monto"].sum() if not df_mes_ant.empty else 0
+        total_gasto_ant = -df_mes_ant[df_mes_ant["categoria"].isin(gasto_categorias)]["monto"].sum() if not df_mes_ant.empty else 0
+        tasa_ahorro_ant = ((total_ingreso_ant - total_gasto_ant) / total_ingreso_ant) if total_ingreso_ant > 0 else None
+        categoria_top = (gastos_mes.index[0], gastos_mes.iloc[0]) if not gastos_mes.empty else None
+        comp_actual_base = gastos_mes
+        comp_anterior_base = df_mes_ant[df_mes_ant["categoria"].isin(gasto_categorias)].groupby("categoria")["monto"].sum().abs() if not df_mes_ant.empty else pd.Series(dtype=float)
+        resumen = generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, tasa_ahorro_ant,
+                                           comp_actual_base, comp_anterior_base, categoria_top)
+        st.markdown(f'<div class="insight-card">📝 <b>Tu mes en resumen:</b> {resumen}</div>', unsafe_allow_html=True)
 
         if es_pro:
             st.markdown("#### Tendencia últimos 6 meses")
@@ -799,3 +840,60 @@ with tab6:
 
         st.divider()
         st.caption("💡 Cuando registres un gasto en la pestaña ➕ Registrar, verás la opción de marcarlo como compartido con el hogar. Los gastos que no marques siguen siendo privados, solo tú los ves.")
+
+with tab7:
+    st.subheader("⚖️ Legal")
+    st.warning("⚠️ **Importante:** este texto es una plantilla de referencia generada para acelerar el arranque del producto. **No reemplaza la revisión de un abogado** antes de operar con usuarios reales o cobrar dinero. Ajusta jurisdicción, datos de contacto y cláusulas específicas de tu país antes de publicarlo como definitivo.")
+
+    with st.expander("📄 Términos de Servicio", expanded=False):
+        st.markdown(f"""
+**Última actualización:** {date.today().strftime('%d/%m/%Y')}
+
+**1. Qué es FinZen**
+FinZen es una herramienta de organización financiera personal: registro de gastos e ingresos, presupuestos y educación financiera general.
+
+**2. Lo que FinZen NO es**
+FinZen **no es un asesor de inversión registrado, no ofrece asesoría financiera personalizada, y no recomienda comprar, vender o mantener ningún instrumento financiero**. La sección "Contexto Económico" muestra indicadores públicos con fines informativos y educativos únicamente. Ninguna funcionalidad de la app debe interpretarse como una recomendación de inversión.
+
+**3. Cuentas y elegibilidad**
+Debes tener al menos la mayoría de edad legal en tu jurisdicción para crear una cuenta. Eres responsable de mantener la confidencialidad de tu contraseña.
+
+**4. Planes y pagos**
+El plan Pro es una suscripción recurrente que se cobra a través de Stripe. Puedes cancelar en cualquier momento; el acceso Pro continúa hasta el final del período ya pagado.
+
+**5. Exactitud de los datos**
+Los datos que muestra FinZen dependen de lo que tú registras o importas. FinZen no verifica la exactitud de las transacciones que ingresas ni de los archivos CSV que subes.
+
+**6. Limitación de responsabilidad**
+FinZen se ofrece "tal cual". En la máxima medida permitida por la ley, no somos responsables por decisiones financieras que tomes basándote en la información de la app.
+
+**7. Cambios a estos términos**
+Podemos actualizar estos términos; te avisaremos dentro de la app ante cambios materiales.
+        """)
+
+    with st.expander("🔒 Aviso de Privacidad", expanded=False):
+        st.markdown("""
+**Qué datos recopilamos**
+- Correo electrónico (para tu cuenta)
+- Transacciones que registras manualmente o importas por CSV (fecha, monto, categoría, descripción)
+- Información de tu hogar compartido, si creas uno (correos de los miembros)
+
+**Qué NO recopilamos**
+- No conectamos tu cuenta bancaria ni pedimos tus credenciales bancarias
+- No vendemos tus datos a terceros
+- No mostramos anuncios de terceros basados en tus datos financieros
+
+**Dónde se almacenan tus datos**
+Tus datos se guardan en una base de datos (Supabase/PostgreSQL) con seguridad a nivel de fila (Row Level Security): solo tú, y quien invites explícitamente a tu hogar, pueden ver tu información.
+
+**Pagos**
+El procesamiento de pagos del plan Pro lo realiza Stripe. FinZen no almacena números de tarjeta.
+
+**Tus derechos**
+Puedes solicitar la eliminación de tu cuenta y tus datos en cualquier momento. (Nota: el flujo de autoservicio para esto aún no está implementado — contacto manual por ahora.)
+
+**Contacto**
+Para dudas sobre privacidad: [agrega aquí tu correo de contacto real].
+        """)
+
+    st.info("💡 **Recordatorio permanente:** todo lo que ves en la pestaña 'Contexto Económico' del Resumen son datos públicos con fines educativos — no una señal de compra o venta. Para decisiones de inversión, consulta a un asesor financiero certificado en tu país.")
