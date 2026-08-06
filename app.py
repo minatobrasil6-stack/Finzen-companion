@@ -110,7 +110,6 @@ st.markdown(f"""
     hr {{ border-color: {BORDE} !important; }}
 
     .pro-badge {{ background: linear-gradient(135deg, {GOLD}, {CORAL}); color: white; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 11px; letter-spacing: 0.03em; }}
-    .admin-badge {{ background: linear-gradient(135deg, {CIELO}, {PINO}); color: white; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 11px; letter-spacing: 0.03em; }}
     .free-badge {{ background-color: {BORDE}; color: {TEXTO}; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 11px; }}
     .insight-card {{ background: {TARJETA}; border: 1px solid {BORDE}; border-left: 4px solid {PINO}; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; animation: fadeInUp 0.35s ease; box-shadow: 0 2px 6px rgba(43,38,32,0.04); }}
     .insight-alerta {{ border-left: 4px solid {CORAL} !important; }}
@@ -138,6 +137,9 @@ def estilo_grafico(fig, titulo=None, height=360):
 
 
 def grafico_salud_financiera(puntaje):
+    """Gauge visual de 'salud financiera' — síntesis de un vistazo, mucho más
+    atractivo que otra fila de números. 0-100: rojo/coral si va mal, dorado si
+    va regular, verde pino si va bien."""
     fig = go.Figure(go.Indicator(
         mode="gauge+number", value=puntaje, number={"suffix": "", "font": {"size": 40, "family": "JetBrains Mono", "color": TEXTO}},
         gauge={
@@ -156,8 +158,17 @@ def grafico_salud_financiera(puntaje):
     return fig
 
 
+def barra_presupuesto(pct, color):
+    pct_mostrado = min(max(pct, 0), 1.0) * 100
+    return (f'<div style="background:{BORDE}; border-radius:8px; height:9px; width:100%; overflow:hidden; margin:3px 0 12px 0;">'
+            f'<div style="background:{color}; height:100%; width:{pct_mostrado}%; border-radius:8px; transition: width 0.3s ease;"></div></div>')
+
+
 def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, tasa_ahorro_ant,
                              comp_actual, comp_anterior, categoria_top):
+    """Narra los números del mes en 2-3 frases, en español simple. Todo lo que
+    dice sale directo de los datos reales del usuario — no interpreta causas
+    ('gastaste más porque...'), no da consejos, solo describe lo que pasó."""
     frases = []
 
     if total_ingreso == 0 and total_gasto == 0:
@@ -181,10 +192,9 @@ def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, ta
 
 
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN — reemplaza antes de producción
 # ============================================================
-STRIPE_PAYMENT_LINK = "https://buy.stripe.com/tu-link-de-pago"
-ADMIN_EMAIL = "minatobrasil6@gmail.com"
+STRIPE_PAYMENT_LINK = "https://buy.stripe.com/tu-link-de-pago"  # TODO: link real de Stripe
 
 CATEGORIAS_DEFECTO = [
     ("Supermercado", "gasto"), ("Restaurantes", "gasto"), ("Transporte", "gasto"),
@@ -213,6 +223,13 @@ def auto_categorizar(descripcion):
     return "Otros gastos"
 
 
+# ============================================================
+# CONTEXTO ECONÓMICO — nudge educativo, NO consejo de inversión.
+# Reutiliza la misma metodología pública y honesta que Q-FSI: modelos
+# académicos validados, datos de FRED (gobierno de EE.UU., dominio público),
+# mostrados con sus límites explícitos. Ningún broker de presupuesto hace
+# esto — es la diferenciación real de FinZen frente a Monarch/YNAB/Copilot.
+# ============================================================
 @st.cache_data(ttl=3600)
 def cargar_fred_csv(series_id, years=None):
     if not REQUESTS_AVAILABLE:
@@ -235,6 +252,9 @@ def cargar_fred_csv(series_id, years=None):
 
 @st.cache_data(ttl=3600)
 def cargar_contexto_economico():
+    """Evalúa los 3 modelos de recesión públicos (mismos que Q-FSI) y devuelve un
+    estado resumido de una sola línea, sin pretender más precisión de la que
+    realmente tienen. Ver Q-FSI para la metodología completa y sus límites."""
     señales, detalle = 0, []
 
     dgs10 = cargar_fred_csv("DGS10", years=1)
@@ -265,6 +285,9 @@ def cargar_contexto_economico():
     return señales, detalle
 
 
+# ============================================================
+# SUPABASE / AUTENTICACIÓN REAL
+# ============================================================
 @st.cache_resource
 def init_supabase():
     if not SUPABASE_AVAILABLE:
@@ -277,7 +300,7 @@ def init_supabase():
 supabase = init_supabase()
 db_connected = supabase is not None
 
-for key, default in [("user", None), ("plan", "free"), ("modo_recuperacion", False)]:
+for key, default in [("user", None), ("plan", "free")]:
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -298,28 +321,13 @@ def sign_up(email, password):
         return None, str(e)
 
 
-def recuperar_credenciales(email_recuperacion):
-    if email_recuperacion.strip().lower() == ADMIN_EMAIL:
-        return True, "Es correo de Administrador. Contacta al soporte técnico interno para restablecer tus credenciales."
-    if not supabase:
-        return False, "Sin conexión a base de datos para procesar recuperación."
-    try:
-        supabase.auth.reset_password_for_email(email_recuperacion)
-        return True, "Se han enviado las instrucciones de recuperación a tu correo electrónico."
-    except Exception as e:
-        return False, str(e)
-
-
 def get_user_plan(email):
-    if email.strip().lower() == ADMIN_EMAIL:
-        return "pro"
     if not supabase:
         return "free"
     try:
         res = supabase.table("subscriptions").select("status").eq("user_email", email).execute()
         if res.data:
-            status = res.data[0].get("status", "free")
-            return "pro" if status == "pro" else "free"
+            return res.data[0].get("status", "free")
         supabase.table("subscriptions").insert({"user_email": email, "status": "free"}).execute()
         return "free"
     except Exception:
@@ -339,6 +347,10 @@ def asegurar_categorias_defecto(email):
         pass
 
 
+# ============================================================
+# HOGARES COMPARTIDOS (Pro) — pareja/familia viendo el mismo presupuesto,
+# sin dejar de poder tener categorías y gastos 100% personales si quieren.
+# ============================================================
 def obtener_hogar(email):
     if not supabase:
         return None
@@ -387,68 +399,41 @@ st.sidebar.markdown("### 🌱 FinZen")
 if not db_connected:
     st.sidebar.warning("⚠️ Sin conexión a base de datos (modo demo). Configura SUPABASE_URL y SUPABASE_KEY en secrets.")
 elif not st.session_state["user"]:
-    if st.session_state.get("modo_recuperacion", False):
-        st.sidebar.markdown("#### Recuperar Acceso")
-        st.sidebar.caption("Ingresa tu correo para recibir instrucciones de recuperación.")
-        correo_recup = st.sidebar.text_input("Correo electrónico registrado")
-        if st.sidebar.button("Enviar instrucciones"):
-            if correo_recup:
-                exito, mensaje = recuperar_credenciales(correo_recup)
-                if exito:
-                    st.sidebar.success(mensaje)
+    st.sidebar.markdown("#### Inicia sesión o crea tu cuenta")
+    correo = st.sidebar.text_input("Correo")
+    clave = st.sidebar.text_input("Contraseña", type="password")
+    acepta_terminos = st.sidebar.checkbox("Acepto los Términos de Servicio y el Aviso de Privacidad (pestaña ⚖️ Legal)")
+    c1, c2 = st.sidebar.columns(2)
+    with c1:
+        if st.button("Entrar"):
+            if correo and clave:
+                user, err = sign_in(correo, clave)
+                if user:
+                    st.session_state["user"] = user.email
+                    st.session_state["plan"] = get_user_plan(user.email)
+                    asegurar_categorias_defecto(user.email)
+                    st.rerun()
                 else:
-                    st.sidebar.error(mensaje)
+                    st.sidebar.error(f"No se pudo iniciar sesión: {err}")
             else:
-                st.sidebar.error("Ingresa un correo válido.")
-        if st.sidebar.button("Volver al inicio de sesión"):
-            st.session_state["modo_recuperacion"] = False
-            st.rerun()
-    else:
-        st.sidebar.markdown("#### Inicia sesión o crea tu cuenta")
-        correo = st.sidebar.text_input("Correo")
-        clave = st.sidebar.text_input("Contraseña", type="password")
-        acepta_terminos = st.sidebar.checkbox("Acepto los Términos de Servicio y el Aviso de Privacidad (pestaña ⚖️ Legal)")
-        c1, c2 = st.sidebar.columns(2)
-        with c1:
-            if st.button("Entrar"):
-                if correo and clave:
-                    user, err = sign_in(correo, clave)
-                    if user:
-                        st.session_state["user"] = user.email
-                        st.session_state["plan"] = get_user_plan(user.email)
-                        asegurar_categorias_defecto(user.email)
-                        st.rerun()
-                    else:
-                        st.sidebar.error(f"No se pudo iniciar sesión: {err}")
+                st.sidebar.error("Ingresa correo y contraseña.")
+    with c2:
+        if st.button("Crear cuenta"):
+            if not acepta_terminos:
+                st.sidebar.error("Debes aceptar los Términos y el Aviso de Privacidad para crear una cuenta.")
+            elif correo and clave:
+                user, err = sign_up(correo, clave)
+                if user:
+                    st.sidebar.success("Cuenta creada. Inicia sesión.")
                 else:
-                    st.sidebar.error("Ingresa correo y contraseña.")
-        with c2:
-            if st.button("Crear cuenta"):
-                if not acepta_terminos:
-                    st.sidebar.error("Debes aceptar los Términos y el Aviso de Privacidad para crear una cuenta.")
-                elif correo and clave:
-                    user, err = sign_up(correo, clave)
-                    if user:
-                        st.sidebar.success("Cuenta creada. Inicia sesión.")
-                    else:
-                        st.sidebar.error(f"No se pudo registrar: {err}")
-                else:
-                    st.sidebar.error("Ingresa correo y contraseña.")
-        
-        st.sidebar.markdown("<br>", unsafe_allow_html=True)
-        if st.sidebar.button("¿Olvidaste tu contraseña o usuario?"):
-            st.session_state["modo_recuperacion"] = True
-            st.rerun()
+                    st.sidebar.error(f"No se pudo registrar: {err}")
+            else:
+                st.sidebar.error("Ingresa correo y contraseña.")
 else:
     st.sidebar.success(f"Hola, **{st.session_state['user']}**")
-    es_admin = st.session_state['user'].strip().lower() == ADMIN_EMAIL
-    if es_admin:
-        badge = '<span class="admin-badge">ADMIN</span> <span class="pro-badge">PRO (GRATIS)</span>'
-    else:
-        badge = '<span class="pro-badge">PRO</span>' if st.session_state["plan"] == "pro" else '<span class="free-badge">GRATIS</span>'
-    
-    st.sidebar.markdown(f"Rol/Plan: {badge}", unsafe_allow_html=True)
-    if st.session_state["plan"] != "pro" and not es_admin:
+    badge = '<span class="pro-badge">PRO</span>' if st.session_state["plan"] == "pro" else '<span class="free-badge">GRATIS</span>'
+    st.sidebar.markdown(f"Plan: {badge}", unsafe_allow_html=True)
+    if st.session_state["plan"] != "pro":
         st.sidebar.markdown(
             f'<br><a href="{STRIPE_PAYMENT_LINK}" target="_blank" style="background-color:{PINO}; color:white; '
             'padding:8px 12px; border-radius:10px; text-decoration:none; font-weight:700; display:block; text-align:center;">'
@@ -461,7 +446,6 @@ else:
                 pass
         st.session_state["user"] = None
         st.session_state["plan"] = "free"
-        st.session_state["modo_recuperacion"] = False
         st.rerun()
 
 def obtener_saludo():
@@ -487,12 +471,14 @@ if not st.session_state["user"]:
     st.stop()
 
 email = st.session_state["user"]
-es_admin = email.strip().lower() == ADMIN_EMAIL
-es_pro = st.session_state["plan"] == "pro" or es_admin
+es_pro = st.session_state["plan"] == "pro"
 
 
 @st.cache_data(ttl=60)
 def cargar_transacciones(email):
+    """No filtra por user_email en el cliente: el RLS ya decide qué filas puede ver
+    (propias + las del hogar del que es miembro) — filtrar aquí además ocultaría
+    las transacciones compartidas por otros miembros del hogar."""
     if not supabase:
         return pd.DataFrame(columns=["id", "fecha", "monto", "categoria", "descripcion", "fuente", "user_email", "household_id"])
     try:
@@ -520,15 +506,7 @@ def cargar_categorias(email):
 
 hogar = obtener_hogar(email) if supabase else None
 
-# Pestaña de administración condicional agregada si es admin
-lista_tabs = ["📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación Financiera", "🏠 Mi Hogar", "⚖️ Legal"]
-if es_admin:
-    lista_tabs.insert(6, "🛠️ Administración")
-
-tabs_creadas = st.tabs(lista_tabs)
-tab1, tab2, tab3, tab4, tab5, tab6 = tabs_creadas[:6]
-tab_admin = tabs_creadas[6] if es_admin else None
-tab7 = tabs_creadas[7] if es_admin else tabs_creadas[6]
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación Financiera", "🏠 Mi Hogar", "⚖️ Legal"])
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
@@ -584,6 +562,7 @@ with tab1:
         m2.metric("Gastos del mes", f"${total_gasto:,.0f}")
         m3.metric("Balance", f"${balance:,.0f}", delta="Positivo" if balance >= 0 else "Negativo", delta_color="normal" if balance >= 0 else "inverse")
 
+        # --- Medidor de salud financiera: síntesis visual, no otro número más ---
         tasa_ahorro = (balance / total_ingreso) if total_ingreso > 0 else 0
         presupuestos_activos = df_cat[(df_cat["tipo"] == "gasto") & df_cat["presupuesto_mensual"].notna()] if not df_cat.empty else pd.DataFrame()
         gastos_por_cat_actual = df_mes[df_mes["categoria"].isin(gasto_categorias)].groupby("categoria")["monto"].sum().abs()
@@ -591,7 +570,7 @@ with tab1:
             cumplidos = sum(1 for _, f in presupuestos_activos.iterrows() if gastos_por_cat_actual.get(f["name"], 0) <= f["presupuesto_mensual"])
             pct_presupuesto_ok = cumplidos / len(presupuestos_activos)
         else:
-            pct_presupuesto_ok = 0.7
+            pct_presupuesto_ok = 0.7  # neutral si aún no configura presupuestos
         puntaje_salud = round(min(100, max(0, min(max(tasa_ahorro, 0), 1) * 60 + pct_presupuesto_ok * 40)))
 
         col_gauge, col_dona = st.columns([1, 1.4])
@@ -623,11 +602,29 @@ with tab1:
             else:
                 st.caption("Sin gastos categorizados este mes todavía.")
 
+        if es_pro and not presupuestos_activos.empty:
+            st.markdown("#### 🎯 Presupuesto restante este mes")
+            presupuesto_total = presupuestos_activos["presupuesto_mensual"].sum()
+            gastado_total_presupuestado = sum(gastos_por_cat_actual.get(f["name"], 0) for _, f in presupuestos_activos.iterrows())
+            restante_total = presupuesto_total - gastado_total_presupuestado
+            st.metric("Total restante (categorías con presupuesto)", f"${restante_total:,.0f}", delta=f"de ${presupuesto_total:,.0f} presupuestados")
+            for _, fila in presupuestos_activos.iterrows():
+                gastado = gastos_por_cat_actual.get(fila["name"], 0)
+                presupuesto = fila["presupuesto_mensual"]
+                restante = presupuesto - gastado
+                pct = (gastado / presupuesto) if presupuesto > 0 else 0
+                color_barra = CORAL if pct > 1 else (GOLD if pct > 0.8 else SALVIA)
+                st.markdown(f"{icono_categoria(fila['name'])} **{fila['name']}** — ${gastado:,.0f} de ${presupuesto:,.0f} "
+                            f"({'te pasaste $' + format(abs(restante), ',.0f') if restante < 0 else 'restante $' + format(restante, ',.0f')})",
+                            unsafe_allow_html=True)
+                st.markdown(barra_presupuesto(pct, color_barra), unsafe_allow_html=True)
+
         clave_celebracion = f"celebrado_{mes_actual}"
         if balance > 0 and puntaje_salud >= 75 and not st.session_state.get(clave_celebracion):
             st.balloons()
             st.session_state[clave_celebracion] = True
 
+        # --- Resumen narrado: 2-3 frases en español simple, sin gráficos que interpretar ---
         total_ingreso_ant = df_mes_ant[df_mes_ant["categoria"].isin(ingreso_categorias)]["monto"].sum() if not df_mes_ant.empty else 0
         total_gasto_ant = -df_mes_ant[df_mes_ant["categoria"].isin(gasto_categorias)]["monto"].sum() if not df_mes_ant.empty else 0
         tasa_ahorro_ant = ((total_ingreso_ant - total_gasto_ant) / total_ingreso_ant) if total_ingreso_ant > 0 else None
@@ -711,10 +708,64 @@ with tab2:
 
     st.divider()
     st.markdown("#### Movimientos recientes")
+    st.caption("Puedes editar monto, categoría, descripción o fecha directamente en la tabla, o eliminar una fila con el ícono 🗑️ — luego dale **Guardar cambios**. Para agregar movimientos nuevos usa el formulario de arriba, no esta tabla.")
     if not df_tx.empty:
-        df_mostrar = df_tx[["fecha", "categoria", "descripcion", "monto"]].head(20).copy()
-        df_mostrar["categoria"] = df_mostrar["categoria"].apply(lambda c: f"{icono_categoria(c)} {c}" if pd.notna(c) else c)
-        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        todas_categorias = df_cat["name"].tolist() if not df_cat.empty else []
+        df_editable = df_tx[["id", "fecha", "categoria", "descripcion", "monto"]].head(30).copy()
+        df_editable["fecha"] = df_editable["fecha"].dt.date
+
+        df_editado = st.data_editor(
+            df_editable,
+            column_order=["fecha", "categoria", "descripcion", "monto"],
+            column_config={
+                "id": None,
+                "fecha": st.column_config.DateColumn("Fecha"),
+                "categoria": st.column_config.SelectboxColumn("Categoría", options=todas_categorias),
+                "descripcion": st.column_config.TextColumn("Descripción"),
+                "monto": st.column_config.NumberColumn("Monto", format="$%.2f", help="Negativo = gasto, positivo = ingreso"),
+            },
+            num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_transacciones",
+        )
+
+        if st.button("💾 Guardar cambios en movimientos"):
+            ids_originales = set(df_editable["id"])
+            ids_editados = set(df_editado["id"].dropna())
+            eliminados = ids_originales - ids_editados
+            errores = []
+            for id_del in eliminados:
+                try:
+                    supabase.table("transactions").delete().eq("id", id_del).execute()
+                except Exception as e:
+                    errores.append(str(e))
+
+            for _, fila in df_editado.iterrows():
+                if pd.isna(fila.get("id")):
+                    continue  # fila nueva agregada en la tabla sin pasar por el formulario: se ignora
+                original = df_editable[df_editable["id"] == fila["id"]]
+                if original.empty:
+                    continue
+                orig = original.iloc[0]
+                cambios = {}
+                if float(fila["monto"]) != float(orig["monto"]):
+                    cambios["monto"] = float(fila["monto"])
+                if fila["categoria"] != orig["categoria"]:
+                    cambios["categoria"] = fila["categoria"]
+                if fila["descripcion"] != orig["descripcion"]:
+                    cambios["descripcion"] = fila["descripcion"]
+                if pd.Timestamp(fila["fecha"]) != pd.Timestamp(orig["fecha"]):
+                    cambios["fecha"] = fila["fecha"].isoformat()
+                if cambios:
+                    try:
+                        supabase.table("transactions").update(cambios).eq("id", fila["id"]).execute()
+                    except Exception as e:
+                        errores.append(str(e))
+
+            if errores:
+                st.error(f"Algunos cambios no se pudieron guardar: {'; '.join(errores)}")
+            else:
+                st.success("Cambios guardados.")
+                st.cache_data.clear()
+                st.rerun()
     else:
         st.caption("Sin movimientos todavía.")
 
@@ -867,21 +918,6 @@ with tab6:
         st.divider()
         st.caption("💡 Cuando registres un gasto en la pestaña ➕ Registrar, verás la opción de marcarlo como compartido con el hogar. Los gastos que no marques siguen siendo privados, solo tú los ves.")
 
-if tab_admin is not None:
-    with tab_admin:
-        st.subheader("🛠️ Panel de Administración")
-        st.caption("Opciones exclusivas de gestión para el administrador del sistema.")
-        st.success(f"Sesión activa con privilegios de administrador para: **{email}**")
-        
-        st.markdown("#### Control global de la aplicación")
-        col_a1, col_a2 = st.columns(2)
-        with col_a1:
-            st.metric("Estado de la BD", "Conectado" if db_connected else "Desconectado")
-        with col_a2:
-            st.metric("Administrador actual", ADMIN_EMAIL)
-            
-        st.info("ℹ️ Como administrador general (`minatobrasil6@gmail.com`), posees acceso total a las funciones Pro de forma gratuita sin necesidad de realizar cargos a través de pasarelas de pago.")
-
 with tab7:
     st.subheader("⚖️ Legal")
     st.warning("⚠️ **Importante:** este texto es una plantilla de referencia generada para acelerar el arranque del producto. **No reemplaza la revisión de un abogado** antes de operar con usuarios reales o cobrar dinero. Ajusta jurisdicción, datos de contacto y cláusulas específicas de tu país antes de publicarlo como definitivo.")
@@ -903,7 +939,7 @@ Debes tener al menos la mayoría de edad legal en tu jurisdicción para crear un
 El plan Pro es una suscripción recurrente que se cobra a través de Stripe. Puedes cancelar en cualquier momento; el acceso Pro continúa hasta el final del período ya pagado.
 
 **5. Exactitud de los datos**
-Los datos que muestra FinZen dependen de lo que tú registres o importas. FinZen no verifica la exactitud de las transacciones que ingresas ni de los archivos CSV que subes.
+Los datos que muestra FinZen dependen de lo que tú registras o importas. FinZen no verifica la exactitud de las transacciones que ingresas ni de los archivos CSV que subes.
 
 **6. Limitación de responsabilidad**
 FinZen se ofrece "tal cual". En la máxima medida permitida por la ley, no somos responsables por decisiones financieras que tomes basándote en la información de la app.
