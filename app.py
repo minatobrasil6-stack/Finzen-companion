@@ -174,8 +174,8 @@ def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, ta
     if total_ingreso == 0 and total_gasto == 0:
         return "Todavía no hay suficientes movimientos este mes para armar un resumen."
 
-    frases.append(f"Este mes llevas {formatear_moneda(total_ingreso)} de ingresos y {formatear_moneda(total_gasto)} de gastos, "
-                   f"con un balance {'positivo' if balance >= 0 else 'negativo'} de {formatear_moneda(abs(balance))}.")
+    frases.append(f"Este mes llevas {formatear_moneda_md(total_ingreso)} de ingresos y {formatear_moneda_md(total_gasto)} de gastos, "
+                   f"con un balance {'positivo' if balance >= 0 else 'negativo'} de {formatear_moneda_md(abs(balance))}.")
 
     if tasa_ahorro_ant is not None and total_ingreso > 0:
         diferencia_pp = (tasa_ahorro - tasa_ahorro_ant) * 100
@@ -186,7 +186,7 @@ def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, ta
     if categoria_top:
         nombre_top, monto_top = categoria_top
         pct_del_total = (monto_top / total_gasto * 100) if total_gasto > 0 else 0
-        frases.append(f"{icono_categoria(nombre_top)} Tu mayor gasto fue **{nombre_top}**, con {formatear_moneda(monto_top)} ({pct_del_total:.0f}% del total).")
+        frases.append(f"{icono_categoria(nombre_top)} Tu mayor gasto fue **{nombre_top}**, con {formatear_moneda_md(monto_top)} ({pct_del_total:.0f}% del total).")
 
     return " ".join(frases)
 
@@ -354,7 +354,9 @@ def actualizar_moneda(email, moneda):
 def formatear_moneda(monto):
     """Formatea según la divisa elegida por el usuario (guardada en session_state).
     COP: sin decimales, punto como separador de miles (convención colombiana).
-    USD: 2 decimales, coma como separador de miles (convención estadounidense)."""
+    USD: 2 decimales, coma como separador de miles (convención estadounidense).
+    Versión SIN escapar — usar en st.metric() y en anotaciones de Plotly, que NO
+    procesan Markdown y mostrarían la barra invertida de escape tal cual."""
     moneda = st.session_state.get("moneda", "COP")
     try:
         monto = float(monto)
@@ -364,6 +366,15 @@ def formatear_moneda(monto):
         return f"US$ {monto:,.2f}"
     texto = f"{monto:,.0f}".replace(",", ".")
     return f"$ {texto} COP"
+
+
+def formatear_moneda_md(monto):
+    """Igual que formatear_moneda(), pero con el '$' escapado (\\$) para usar dentro
+    de st.markdown/st.caption/st.write o HTML — Streamlit interpreta un par de '$'
+    en la misma línea de Markdown como una fórmula LaTeX; con dos montos en la misma
+    frase (ej. "$1.100.000 de $1.500.000"), todo lo de en medio se renderizaba como
+    código crudo en vez de texto normal. Escapado, siempre se ve como texto plano."""
+    return formatear_moneda(monto).replace("$", "\\$")
 
 
 # ============================================================
@@ -802,7 +813,7 @@ with tab1:
                 fig.add_annotation(text=f"{formatear_moneda(gastos_mes.sum())}<br><span style='font-size:11px;color:{TEXTO_SUAVE}'>total</span>",
                                     showarrow=False, font=dict(family="JetBrains Mono", size=18, color=TEXTO))
                 st.plotly_chart(fig, use_container_width=True)
-                chips = "".join(f'<span class="cat-chip">{icono_categoria(cat)} {cat} · {formatear_moneda(monto)}</span>' for cat, monto in gastos_mes.items())
+                chips = "".join(f'<span class="cat-chip">{icono_categoria(cat)} {cat} · {formatear_moneda_md(monto)}</span>' for cat, monto in gastos_mes.items())
                 st.markdown(chips, unsafe_allow_html=True)
             else:
                 st.caption("Sin gastos categorizados este mes todavía.")
@@ -819,8 +830,8 @@ with tab1:
                 restante = presupuesto - gastado
                 pct = (gastado / presupuesto) if presupuesto > 0 else 0
                 color_barra = CORAL if pct > 1 else (GOLD if pct > 0.8 else SALVIA)
-                st.markdown(f"{icono_categoria(fila['name'])} **{fila['name']}** — {formatear_moneda(gastado)} de {formatear_moneda(presupuesto)} "
-                            f"({'te pasaste ' + formatear_moneda(abs(restante)) if restante < 0 else 'restante ' + formatear_moneda(restante)})",
+                st.markdown(f"{icono_categoria(fila['name'])} **{fila['name']}** — {formatear_moneda_md(gastado)} de {formatear_moneda_md(presupuesto)} "
+                            f"({'te pasaste ' + formatear_moneda_md(abs(restante)) if restante < 0 else 'restante ' + formatear_moneda_md(restante)})",
                             unsafe_allow_html=True)
                 st.markdown(barra_presupuesto(pct, color_barra), unsafe_allow_html=True)
 
@@ -849,7 +860,7 @@ with tab1:
                     st.metric("Total estimado en recurrentes/mes", f"{formatear_moneda(total_recurrente_mensual)}")
                     for r in recurrentes:
                         etiqueta_frecuencia = "mensual" if r["consecutivo"] else "irregular"
-                        st.markdown(f"{icono_categoria(r['categoria'])} **{r['descripcion']}** — ~{formatear_moneda(r['monto_promedio'])}/mes · "
+                        st.markdown(f"{icono_categoria(r['categoria'])} **{r['descripcion']}** — ~{formatear_moneda_md(r['monto_promedio'])}/mes · "
                                     f"visto en {r['meses_detectados']} meses ({etiqueta_frecuencia})")
 
         if es_pro:
@@ -879,7 +890,7 @@ with tab1:
                     gastado = comp_actual.get(fila["name"], 0)
                     presupuesto = fila["presupuesto_mensual"]
                     if presupuesto and gastado > presupuesto:
-                        st.markdown(f'<div class="insight-card insight-alerta">{icono_categoria(fila["name"])} Ya superaste tu presupuesto de <b>{fila["name"]}</b>: {formatear_moneda(gastado)} de {formatear_moneda(presupuesto)}.</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="insight-card insight-alerta">{icono_categoria(fila["name"])} Ya superaste tu presupuesto de <b>{fila["name"]}</b>: {formatear_moneda_md(gastado)} de {formatear_moneda_md(presupuesto)}.</div>', unsafe_allow_html=True)
         else:
             st.info("✨ Los insights automáticos y la tendencia de 6 meses están en el plan Pro.")
 
@@ -944,7 +955,7 @@ with tab2:
             df_filtrado = df_filtrado[(df_filtrado["fecha"] >= pd.Timestamp(rango_fechas[0])) & (df_filtrado["fecha"] <= pd.Timestamp(rango_fechas[1]))]
 
         if texto_busqueda or categorias_filtro or (isinstance(rango_fechas, tuple) and len(rango_fechas) == 2):
-            st.caption(f"{len(df_filtrado)} movimiento(s) encontrados · suma: {formatear_moneda(df_filtrado['monto'].sum())}")
+            st.caption(f"{len(df_filtrado)} movimiento(s) encontrados · suma: {formatear_moneda_md(df_filtrado['monto'].sum())}")
 
         df_editable = df_filtrado[["id", "fecha", "categoria", "descripcion", "monto"]].head(100).copy()
         df_editable["fecha"] = df_editable["fecha"].dt.date
@@ -1124,7 +1135,7 @@ with tab5:
                 col_a, col_b = st.columns([3, 1])
                 with col_a:
                     etiqueta_fecha = f" · meta: {meta['fecha_objetivo']}" if pd.notna(meta.get("fecha_objetivo")) else ""
-                    st.markdown(f"🏆 **{meta['nombre']}** — {formatear_moneda(meta['monto_actual'])} de {formatear_moneda(meta['monto_objetivo'])} ({pct*100:.0f}%){etiqueta_fecha}")
+                    st.markdown(f"🏆 **{meta['nombre']}** — {formatear_moneda_md(meta['monto_actual'])} de {formatear_moneda_md(meta['monto_objetivo'])} ({pct*100:.0f}%){etiqueta_fecha}")
                     st.markdown(barra_presupuesto(pct, SALVIA if pct < 1 else GOLD), unsafe_allow_html=True)
                 with col_b:
                     nuevo_avance = st.number_input("Actualizar a $", min_value=0.0, value=float(meta["monto_actual"]), step=50.0,
@@ -1173,7 +1184,7 @@ with tab6:
             for _, item in df_patrimonio.iterrows():
                 icono_item = "💰" if item["tipo"] == "activo" else "💳"
                 col_a, col_b = st.columns([4, 1])
-                col_a.write(f"{icono_item} {item['nombre']} — {formatear_moneda(item['monto'])}")
+                col_a.write(f"{icono_item} {item['nombre']} — {formatear_moneda_md(item['monto'])}")
                 if col_b.button("Quitar", key=f"del_patrimonio_{item['id']}"):
                     eliminar_item_patrimonio(item["id"])
                     st.cache_data.clear()
