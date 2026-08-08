@@ -8,6 +8,81 @@ import requests
 from datetime import date
 
 # ============================================================
+# CONFIGURACIÓN DE SEGURIDAD Y PERFIL
+# ============================================================
+ADMIN_EMAIL = "minatobrasil6@gmail.com" # <--- CAMBIA ESTO POR TU EMAIL REAL
+
+# ... (Mantén toda la lógica anterior de importaciones y paleta de colores igual) ...
+
+# ============================================================
+# MODIFICACIÓN: SIDEBAR CON PANEL ADMIN
+# ============================================================
+if not st.session_state["user"]:
+    # ... (código de login existente) ...
+    pass
+else:
+    # Mostrar nombre en lugar de correo
+    nombre_usuario = st.session_state["user"].split("@")[0].capitalize()
+    st.sidebar.success(f"Hola, **{nombre_usuario}**")
+
+    # Panel Admin visible solo para ti
+    if st.session_state["user"] == ADMIN_EMAIL:
+        with st.sidebar.expander("🛡️ Panel de Administrador"):
+            st.write("Herramientas exclusivas:")
+            if st.button("Limpiar Caché Global"):
+                st.cache_data.clear()
+                st.success("Caché limpia")
+    
+    # ... (resto del sidebar: Plan Pro, Logout, etc) ...
+
+# ============================================================
+# MODIFICACIÓN: TAB PRESUPUESTOS (Gestión y Comparativa)
+# ============================================================
+with tab4:
+    st.subheader("🎯 Presupuestos y Control")
+
+    if not es_pro:
+        st.info("✨ Funcionalidad Pro.")
+    elif df_cat.empty:
+        st.caption("Aún no tienes categorías.")
+    else:
+        # A. Comparativa Presupuesto vs Gasto
+        st.markdown("#### 📊 Comparativa Actual")
+        
+        # Calcular gastos por categoría del mes actual
+        gastos_actuales = df_mes.groupby("categoria")["monto"].sum().abs()
+        
+        presupuestos_df = df_cat[df_cat["tipo"] == "gasto"].copy()
+        presupuestos_df["Gastado"] = presupuestos_df["name"].map(gastos_actuales).fillna(0)
+        
+        # Mostrar tabla comparativa
+        st.dataframe(
+            presupuestos_df[["name", "presupuesto_mensual", "Gastado"]].rename(
+                columns={"name": "Categoría", "presupuesto_mensual": "Presupuesto"}
+            ),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.divider()
+        st.markdown("#### ⚙️ Editar o Eliminar Categorías")
+        
+        # B. Eliminar Categoría
+        cat_a_borrar = st.selectbox("Selecciona para eliminar:", presupuestos_df["name"].tolist())
+        if st.button("🗑️ Eliminar categoría seleccionada"):
+            if supabase:
+                supabase.table("categories").delete().eq("name", cat_a_borrar).eq("user_email", email).execute()
+                st.success(f"Categoría '{cat_a_borrar}' eliminada.")
+                st.rerun()
+
+        st.divider()
+        # C. Edición (lo que ya tenías)
+        # ... (Mantén aquí el bucle para editar presupuestos) ...
+
+# ... (El resto del código se mantiene igual) ...
+
+
+# ============================================================
 # FINZEN — app.py
 # Versión consolidada:
 # - UI cálida y responsive, inspirada en el diseño de la captura.
