@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import io
 import re
 import math
-from datetime import date
+from datetime import date, datetime, timedelta
 
 try:
     from supabase import create_client, Client
@@ -18,6 +18,12 @@ try:
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
+
+try:
+    import extra_streamlit_components as stx
+    COOKIES_AVAILABLE = True
+except ImportError:
+    COOKIES_AVAILABLE = False
 
 st.set_page_config(page_title="FinZen | Tu compañero de finanzas", layout="wide", page_icon="🌱")
 
@@ -306,17 +312,69 @@ def init_supabase():
 supabase = init_supabase()
 db_connected = supabase is not None
 
-for key, default in [("user", None), ("plan", "free"), ("moneda", "COP")]:
+for key, default in [("user", None), ("plan", "free"), ("moneda", "COP"), ("intento_restaurar_sesion", False)]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+# ============================================================
+# SESIÓN PERSISTENTE — sin esto, st.session_state se borra cada vez que se
+# recarga la página (F5), obligando a iniciar sesión de nuevo aunque el login
+# siga siendo válido. La cookie guarda el "refresh token" de Supabase (no la
+# contraseña); al recargar, se usa ese token para restaurar la sesión sola.
+# ============================================================
+NOMBRE_COOKIE_SESION = "finzen_refresh_token"
+
+
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager(key="finzen_cookie_manager") if COOKIES_AVAILABLE else None
+
+
+cookie_manager = get_cookie_manager()
+
+
+def guardar_sesion_en_cookie(session):
+    if cookie_manager and session and getattr(session, "refresh_token", None):
+        cookie_manager.set(NOMBRE_COOKIE_SESION, session.refresh_token,
+                            expires_at=datetime.now() + timedelta(days=30), key="set_cookie_login")
+
+
+def borrar_cookie_sesion():
+    if cookie_manager:
+        try:
+            cookie_manager.delete(NOMBRE_COOKIE_SESION, key="del_cookie_login")
+        except Exception:
+            pass
+
+
+def restaurar_sesion_desde_cookie():
+    """Se ejecuta una sola vez por sesión de navegador. Si hay una cookie con un
+    refresh token válido, reconstruye la sesión de Supabase sin pedir contraseña."""
+    if not (supabase and cookie_manager) or st.session_state["user"] or st.session_state["intento_restaurar_sesion"]:
+        return
+    st.session_state["intento_restaurar_sesion"] = True
+    refresh_token = cookie_manager.get(NOMBRE_COOKIE_SESION)
+    if not refresh_token:
+        return
+    try:
+        res = supabase.auth.refresh_session(refresh_token)
+        if res and res.user:
+            st.session_state["user"] = res.user.email
+            st.session_state["plan"], st.session_state["moneda"] = get_user_plan(res.user.email)
+            asegurar_categorias_defecto(res.user.email)
+            guardar_sesion_en_cookie(res.session)  # Supabase rota el refresh token: guardar el nuevo
+            st.rerun()
+    except Exception:
+        borrar_cookie_sesion()
 
 
 def sign_in(email, password):
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        return res.user, None
+        return res.user, res.session, None
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 
 def sign_up(email, password):
@@ -351,30 +409,44 @@ def actualizar_moneda(email, moneda):
         return False
 
 
-def formatear_moneda(monto):
-    """Formatea según la divisa elegida por el usuario (guardada en session_state).
-    COP: sin decimales, punto como separador de miles (convención colombiana).
-    USD: 2 decimales, coma como separador de miles (convención estadounidense).
-    Versión SIN escapar — usar en st.metric() y en anotaciones de Plotly, que NO
+@st.cache_data(ttl=21600)  # 6 horas — el tipo de cambio no necesita ser al segundo
+def obtener_tasa_cop_usd():
+    """Tasa COP por 1 USD, desde una API pública gratuita (sin llave). Si falla,
+    usa una tasa de referencia aproximada como respaldo para que la app no se caiga,
+    marcada como tal en la interfaz."""
+    if REQUESTS_AVAILABLE:
+        try:
+            resp = requests.get("https://open.er-api.com/v6/latest/USD", timeout=6)
+            if resp.status_code == 200:
+                tasa = resp.json().get("rates", {}).get("COP")
+                if tasa:
+                    return tasa, True
+        except Exception:
+            pass
+    return 4000, False  # respaldo aproximado, no en vivo
+
+
+def formatear_moneda(monto_cop):
+    """Todos los montos se guardan en COP. Se muestran SIEMPRE en COP y USD al
+    mismo tiempo (equivalente aproximado), en vez de obligar a elegir una sola
+    divisa. Versión SIN escapar — usar en st.metric() y en Plotly, que no
     procesan Markdown y mostrarían la barra invertida de escape tal cual."""
-    moneda = st.session_state.get("moneda", "COP")
     try:
-        monto = float(monto)
+        monto_cop = float(monto_cop)
     except (TypeError, ValueError):
-        monto = 0.0
-    if moneda == "USD":
-        return f"US$ {monto:,.2f}"
-    texto = f"{monto:,.0f}".replace(",", ".")
-    return f"$ {texto} COP"
+        monto_cop = 0.0
+    tasa, _ = obtener_tasa_cop_usd()
+    monto_usd = monto_cop / tasa if tasa else 0
+    texto_cop = f"{monto_cop:,.0f}".replace(",", ".")
+    return f"$ {texto_cop} COP (US$ {monto_usd:,.2f})"
 
 
-def formatear_moneda_md(monto):
-    """Igual que formatear_moneda(), pero con el '$' escapado (\\$) para usar dentro
-    de st.markdown/st.caption/st.write o HTML — Streamlit interpreta un par de '$'
-    en la misma línea de Markdown como una fórmula LaTeX; con dos montos en la misma
-    frase (ej. "$1.100.000 de $1.500.000"), todo lo de en medio se renderizaba como
-    código crudo en vez de texto normal. Escapado, siempre se ve como texto plano."""
-    return formatear_moneda(monto).replace("$", "\\$")
+def formatear_moneda_md(monto_cop):
+    """Igual que formatear_moneda(), con el '$' escapado (\\$) para usar dentro de
+    st.markdown/st.caption/st.write o HTML — Streamlit interpreta un par de '$' en
+    la misma línea de Markdown como una fórmula LaTeX; con dos montos en la misma
+    frase, todo lo de en medio se renderizaba como código crudo en vez de texto."""
+    return formatear_moneda(monto_cop).replace("$", "\\$")
 
 
 # ============================================================
@@ -596,6 +668,8 @@ def detectar_recurrentes(df_tx, gasto_categorias):
     return sorted(resultados, key=lambda r: r["monto_promedio"], reverse=True)
 
 
+restaurar_sesion_desde_cookie()
+
 st.sidebar.markdown("### 🌱 FinZen")
 if not db_connected:
     st.sidebar.warning("⚠️ Sin conexión a base de datos (modo demo). Configura SUPABASE_URL y SUPABASE_KEY en secrets.")
@@ -608,11 +682,12 @@ elif not st.session_state["user"]:
     with c1:
         if st.button("Entrar"):
             if correo and clave:
-                user, err = sign_in(correo, clave)
+                user, session, err = sign_in(correo, clave)
                 if user:
                     st.session_state["user"] = user.email
                     st.session_state["plan"], st.session_state["moneda"] = get_user_plan(user.email)
                     asegurar_categorias_defecto(user.email)
+                    guardar_sesion_en_cookie(session)
                     st.rerun()
                 else:
                     st.sidebar.error(f"No se pudo iniciar sesión: {err}")
@@ -635,12 +710,8 @@ else:
     badge = '<span class="pro-badge">PRO</span>' if st.session_state["plan"] == "pro" else '<span class="free-badge">GRATIS</span>'
     st.sidebar.markdown(f"Plan: {badge}", unsafe_allow_html=True)
 
-    moneda_elegida = st.sidebar.radio("Divisa", ["COP", "USD"], horizontal=True,
-                                       index=["COP", "USD"].index(st.session_state.get("moneda", "COP")))
-    if moneda_elegida != st.session_state.get("moneda"):
-        st.session_state["moneda"] = moneda_elegida
-        actualizar_moneda(st.session_state["user"], moneda_elegida)
-        st.rerun()
+    _tasa_actual, _tasa_en_vivo = obtener_tasa_cop_usd()
+    st.sidebar.caption(f"💱 Montos en COP y USD · 1 USD ≈ $ {_tasa_actual:,.0f} COP" + ("" if _tasa_en_vivo else " (tasa de respaldo, no en vivo)"))
 
     if st.session_state["plan"] != "pro":
         st.sidebar.markdown(
@@ -653,8 +724,10 @@ else:
                 supabase.auth.sign_out()
             except Exception:
                 pass
+        borrar_cookie_sesion()
         st.session_state["user"] = None
         st.session_state["plan"] = "free"
+        st.session_state["intento_restaurar_sesion"] = False
         st.rerun()
 
 def obtener_saludo():
