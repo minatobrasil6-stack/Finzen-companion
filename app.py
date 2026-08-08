@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import io
 import re
 import math
-from datetime import date, datetime, timedelta
+from datetime import date
 
 try:
     from supabase import create_client, Client
@@ -18,12 +18,6 @@ try:
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
-
-try:
-    import extra_streamlit_components as stx
-    COOKIES_AVAILABLE = True
-except ImportError:
-    COOKIES_AVAILABLE = False
 
 st.set_page_config(page_title="FinZen | Tu compañero de finanzas", layout="wide", page_icon="🌱")
 
@@ -164,12 +158,6 @@ def grafico_salud_financiera(puntaje):
     return fig
 
 
-def barra_presupuesto(pct, color):
-    pct_mostrado = min(max(pct, 0), 1.0) * 100
-    return (f'<div style="background:{BORDE}; border-radius:8px; height:9px; width:100%; overflow:hidden; margin:3px 0 12px 0;">'
-            f'<div style="background:{color}; height:100%; width:{pct_mostrado}%; border-radius:8px; transition: width 0.3s ease;"></div></div>')
-
-
 def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, tasa_ahorro_ant,
                              comp_actual, comp_anterior, categoria_top):
     """Narra los números del mes en 2-3 frases, en español simple. Todo lo que
@@ -180,8 +168,8 @@ def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, ta
     if total_ingreso == 0 and total_gasto == 0:
         return "Todavía no hay suficientes movimientos este mes para armar un resumen."
 
-    frases.append(f"Este mes llevas {formatear_moneda_md(total_ingreso)} de ingresos y {formatear_moneda_md(total_gasto)} de gastos, "
-                   f"con un balance {'positivo' if balance >= 0 else 'negativo'} de {formatear_moneda_md(abs(balance))}.")
+    frases.append(f"Este mes llevas ${total_ingreso:,.0f} de ingresos y ${total_gasto:,.0f} de gastos, "
+                   f"con un balance {'positivo' if balance >= 0 else 'negativo'} de ${abs(balance):,.0f}.")
 
     if tasa_ahorro_ant is not None and total_ingreso > 0:
         diferencia_pp = (tasa_ahorro - tasa_ahorro_ant) * 100
@@ -192,7 +180,7 @@ def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, ta
     if categoria_top:
         nombre_top, monto_top = categoria_top
         pct_del_total = (monto_top / total_gasto * 100) if total_gasto > 0 else 0
-        frases.append(f"{icono_categoria(nombre_top)} Tu mayor gasto fue **{nombre_top}**, con {formatear_moneda_md(monto_top)} ({pct_del_total:.0f}% del total).")
+        frases.append(f"{icono_categoria(nombre_top)} Tu mayor gasto fue **{nombre_top}**, con ${monto_top:,.0f} ({pct_del_total:.0f}% del total).")
 
     return " ".join(frases)
 
@@ -201,12 +189,6 @@ def generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, ta
 # CONFIGURACIÓN — reemplaza antes de producción
 # ============================================================
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/tu-link-de-pago"  # TODO: link real de Stripe
-
-# El control de acceso REAL vive en las funciones SQL (admin_*, verifican
-# auth.jwt()->>'email' dentro de la base de datos). Esta constante solo controla
-# si el botón/pestaña se muestra en la interfaz — aunque alguien la cambiara en una
-# copia del código, las funciones de la base de datos seguirían rechazándolo.
-ADMIN_EMAIL = "minatobrasil6@gmail.com"
 
 CATEGORIAS_DEFECTO = [
     ("Supermercado", "gasto"), ("Restaurantes", "gasto"), ("Transporte", "gasto"),
@@ -312,72 +294,17 @@ def init_supabase():
 supabase = init_supabase()
 db_connected = supabase is not None
 
-for key, default in [("user", None), ("plan", "free"), ("moneda", "COP"), ("intento_restaurar_sesion", False)]:
+for key, default in [("user", None), ("plan", "free")]:
     if key not in st.session_state:
         st.session_state[key] = default
-
-
-# ============================================================
-# SESIÓN PERSISTENTE — sin esto, st.session_state se borra cada vez que se
-# recarga la página (F5), obligando a iniciar sesión de nuevo aunque el login
-# siga siendo válido. La cookie guarda el "refresh token" de Supabase (no la
-# contraseña); al recargar, se usa ese token para restaurar la sesión sola.
-# ============================================================
-NOMBRE_COOKIE_SESION = "finzen_refresh_token"
-
-
-def get_cookie_manager():
-    """Sin @st.cache_resource a propósito: CookieManager crea un widget/componente
-    internamente, y Streamlit no permite widgets dentro de funciones cacheadas
-    (CachedWidgetWarning). Es liviano, no necesita cachearse — se puede llamar
-    en cada rerun sin problema real de rendimiento."""
-    return stx.CookieManager(key="finzen_cookie_manager") if COOKIES_AVAILABLE else None
-
-
-cookie_manager = get_cookie_manager()
-
-
-def guardar_sesion_en_cookie(session):
-    if cookie_manager and session and getattr(session, "refresh_token", None):
-        cookie_manager.set(NOMBRE_COOKIE_SESION, session.refresh_token,
-                            expires_at=datetime.now() + timedelta(days=30), key="set_cookie_login")
-
-
-def borrar_cookie_sesion():
-    if cookie_manager:
-        try:
-            cookie_manager.delete(NOMBRE_COOKIE_SESION, key="del_cookie_login")
-        except Exception:
-            pass
-
-
-def restaurar_sesion_desde_cookie():
-    """Se ejecuta una sola vez por sesión de navegador. Si hay una cookie con un
-    refresh token válido, reconstruye la sesión de Supabase sin pedir contraseña."""
-    if not (supabase and cookie_manager) or st.session_state["user"] or st.session_state["intento_restaurar_sesion"]:
-        return
-    st.session_state["intento_restaurar_sesion"] = True
-    refresh_token = cookie_manager.get(NOMBRE_COOKIE_SESION)
-    if not refresh_token:
-        return
-    try:
-        res = supabase.auth.refresh_session(refresh_token)
-        if res and res.user:
-            st.session_state["user"] = res.user.email
-            st.session_state["plan"], st.session_state["moneda"] = get_user_plan(res.user.email)
-            asegurar_categorias_defecto(res.user.email)
-            guardar_sesion_en_cookie(res.session)  # Supabase rota el refresh token: guardar el nuevo
-            st.rerun()
-    except Exception:
-        borrar_cookie_sesion()
 
 
 def sign_in(email, password):
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        return res.user, res.session, None
+        return res.user, None
     except Exception as e:
-        return None, None, str(e)
+        return None, str(e)
 
 
 def sign_up(email, password):
@@ -389,115 +316,16 @@ def sign_up(email, password):
 
 
 def get_user_plan(email):
-    """Devuelve (status, moneda). Si el usuario no tiene fila aún, la crea con
-    valores por defecto (free / COP)."""
     if not supabase:
-        return "free", "COP"
+        return "free"
     try:
-        res = supabase.table("subscriptions").select("status, moneda").eq("user_email", email).execute()
+        res = supabase.table("subscriptions").select("status").eq("user_email", email).execute()
         if res.data:
-            fila = res.data[0]
-            return fila.get("status", "free"), fila.get("moneda", "COP")
-        supabase.table("subscriptions").insert({"user_email": email, "status": "free", "moneda": "COP"}).execute()
-        return "free", "COP"
+            return res.data[0].get("status", "free")
+        supabase.table("subscriptions").insert({"user_email": email, "status": "free"}).execute()
+        return "free"
     except Exception:
-        return "free", "COP"
-
-
-def actualizar_moneda(email, moneda):
-    try:
-        supabase.table("subscriptions").update({"moneda": moneda}).eq("user_email", email).execute()
-        return True
-    except Exception:
-        return False
-
-
-@st.cache_data(ttl=21600)  # 6 horas — el tipo de cambio no necesita ser al segundo
-def obtener_tasa_cop_usd():
-    """Tasa COP por 1 USD, desde una API pública gratuita (sin llave). Si falla,
-    usa una tasa de referencia aproximada como respaldo para que la app no se caiga,
-    marcada como tal en la interfaz."""
-    if REQUESTS_AVAILABLE:
-        try:
-            resp = requests.get("https://open.er-api.com/v6/latest/USD", timeout=6)
-            if resp.status_code == 200:
-                tasa = resp.json().get("rates", {}).get("COP")
-                if tasa:
-                    return tasa, True
-        except Exception:
-            pass
-    return 4000, False  # respaldo aproximado, no en vivo
-
-
-def formatear_moneda(monto_cop):
-    """Todos los montos se guardan en COP. Se muestran SIEMPRE en COP y USD al
-    mismo tiempo (equivalente aproximado), en vez de obligar a elegir una sola
-    divisa. Versión SIN escapar — usar en st.metric() y en Plotly, que no
-    procesan Markdown y mostrarían la barra invertida de escape tal cual."""
-    try:
-        monto_cop = float(monto_cop)
-    except (TypeError, ValueError):
-        monto_cop = 0.0
-    tasa, _ = obtener_tasa_cop_usd()
-    monto_usd = monto_cop / tasa if tasa else 0
-    texto_cop = f"{monto_cop:,.0f}".replace(",", ".")
-    return f"$ {texto_cop} COP (US$ {monto_usd:,.2f})"
-
-
-def formatear_moneda_md(monto_cop):
-    """Igual que formatear_moneda(), con el '$' escapado (\\$) para usar dentro de
-    st.markdown/st.caption/st.write o HTML — Streamlit interpreta un par de '$' en
-    la misma línea de Markdown como una fórmula LaTeX; con dos montos en la misma
-    frase, todo lo de en medio se renderizaba como código crudo en vez de texto."""
-    return formatear_moneda(monto_cop).replace("$", "\\$")
-
-
-# ============================================================
-# PANEL DE ADMINISTRADOR — llama a funciones RPC que verifican el correo
-# DENTRO de la base de datos (ver migración admin_*). Aunque esta capa Python
-# tuviera un bug, la base de datos rechazaría a cualquiera que no sea ADMIN_EMAIL.
-# ============================================================
-def admin_listar_usuarios():
-    try:
-        res = supabase.rpc("admin_listar_usuarios").execute()
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=["user_email", "status", "stripe_customer_id", "created_at"])
-    except Exception as e:
-        st.error(f"No se pudo listar usuarios: {e}")
-        return pd.DataFrame()
-
-
-def admin_actualizar_plan(objetivo_email, nuevo_status):
-    try:
-        supabase.rpc("admin_actualizar_plan", {"objetivo_email": objetivo_email, "nuevo_status": nuevo_status}).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-def admin_listar_transacciones(limite=200):
-    try:
-        res = supabase.rpc("admin_listar_transacciones", {"limite": limite}).execute()
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
-    except Exception as e:
-        st.error(f"No se pudo listar transacciones: {e}")
-        return pd.DataFrame()
-
-
-def admin_eliminar_transaccion(objetivo_id):
-    try:
-        supabase.rpc("admin_eliminar_transaccion", {"objetivo_id": objetivo_id}).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-def admin_listar_hogares():
-    try:
-        res = supabase.rpc("admin_listar_hogares").execute()
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
-    except Exception as e:
-        st.error(f"No se pudo listar hogares: {e}")
-        return pd.DataFrame()
+        return "free"
 
 
 def asegurar_categorias_defecto(email):
@@ -561,118 +389,6 @@ def quitar_miembro(household_id, email_miembro):
         return False, str(e)
 
 
-# ============================================================
-# METAS DE AHORRO
-# ============================================================
-@st.cache_data(ttl=60)
-def cargar_metas():
-    if not supabase:
-        return pd.DataFrame(columns=["id", "nombre", "monto_objetivo", "monto_actual", "fecha_objetivo", "user_email", "household_id"])
-    try:
-        res = supabase.table("goals").select("*").order("created_at", desc=True).execute()
-        cols = ["id", "nombre", "monto_objetivo", "monto_actual", "fecha_objetivo", "user_email", "household_id"]
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=cols)
-    except Exception:
-        return pd.DataFrame(columns=["id", "nombre", "monto_objetivo", "monto_actual", "fecha_objetivo", "user_email", "household_id"])
-
-
-def crear_meta(email, nombre, monto_objetivo, fecha_objetivo, household_id=None):
-    try:
-        registro = {"user_email": email, "nombre": nombre, "monto_objetivo": monto_objetivo, "monto_actual": 0}
-        if fecha_objetivo:
-            registro["fecha_objetivo"] = fecha_objetivo.isoformat()
-        if household_id:
-            registro["household_id"] = household_id
-        supabase.table("goals").insert(registro).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-def actualizar_avance_meta(meta_id, nuevo_monto):
-    try:
-        supabase.table("goals").update({"monto_actual": nuevo_monto}).eq("id", meta_id).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-def eliminar_meta(meta_id):
-    try:
-        supabase.table("goals").delete().eq("id", meta_id).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-# ============================================================
-# PATRIMONIO NETO
-# ============================================================
-@st.cache_data(ttl=60)
-def cargar_patrimonio(email):
-    if not supabase:
-        return pd.DataFrame(columns=["id", "nombre", "tipo", "monto"])
-    try:
-        res = supabase.table("net_worth_items").select("*").eq("user_email", email).order("tipo").execute()
-        cols = ["id", "nombre", "tipo", "monto"]
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=cols)
-    except Exception:
-        return pd.DataFrame(columns=["id", "nombre", "tipo", "monto"])
-
-
-def agregar_item_patrimonio(email, nombre, tipo, monto):
-    try:
-        supabase.table("net_worth_items").insert({"user_email": email, "nombre": nombre, "tipo": tipo, "monto": monto}).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-def eliminar_item_patrimonio(item_id):
-    try:
-        supabase.table("net_worth_items").delete().eq("id", item_id).execute()
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-
-# ============================================================
-# DETECTOR DE GASTOS RECURRENTES / SUSCRIPCIONES
-# Heurística simple sobre los datos que ya existen — sin tabla nueva:
-# agrupa por descripción normalizada, busca montos similares (±10%) en
-# al menos 2 meses distintos, y estima la periodicidad.
-# ============================================================
-def detectar_recurrentes(df_tx, gasto_categorias):
-    if df_tx.empty:
-        return []
-    df = df_tx[df_tx["categoria"].isin(gasto_categorias)].copy()
-    if df.empty:
-        return []
-    df["desc_norm"] = df["descripcion"].fillna("").str.lower().str.strip()
-    df = df[df["desc_norm"] != ""]
-    df["mes"] = df["fecha"].dt.to_period("M")
-    df["monto_abs"] = df["monto"].abs()
-
-    resultados = []
-    for desc, grupo in df.groupby("desc_norm"):
-        meses_unicos = grupo["mes"].nunique()
-        if meses_unicos < 2:
-            continue
-        monto_prom = grupo["monto_abs"].mean()
-        monto_std = grupo["monto_abs"].std() or 0
-        if monto_prom > 0 and (monto_std / monto_prom) > 0.15:
-            continue  # montos muy variables: no parece recurrente fijo
-        meses_ordenados = sorted(grupo["mes"].unique())
-        consecutivos = all((meses_ordenados[i+1] - meses_ordenados[i]).n == 1 for i in range(len(meses_ordenados) - 1))
-        resultados.append({
-            "descripcion": grupo["descripcion"].iloc[-1], "categoria": grupo["categoria"].iloc[-1],
-            "monto_promedio": monto_prom, "meses_detectados": meses_unicos, "consecutivo": consecutivos,
-        })
-    return sorted(resultados, key=lambda r: r["monto_promedio"], reverse=True)
-
-
-restaurar_sesion_desde_cookie()
-
 st.sidebar.markdown("### 🌱 FinZen")
 if not db_connected:
     st.sidebar.warning("⚠️ Sin conexión a base de datos (modo demo). Configura SUPABASE_URL y SUPABASE_KEY en secrets.")
@@ -685,12 +401,11 @@ elif not st.session_state["user"]:
     with c1:
         if st.button("Entrar"):
             if correo and clave:
-                user, session, err = sign_in(correo, clave)
+                user, err = sign_in(correo, clave)
                 if user:
                     st.session_state["user"] = user.email
-                    st.session_state["plan"], st.session_state["moneda"] = get_user_plan(user.email)
+                    st.session_state["plan"] = get_user_plan(user.email)
                     asegurar_categorias_defecto(user.email)
-                    guardar_sesion_en_cookie(session)
                     st.rerun()
                 else:
                     st.sidebar.error(f"No se pudo iniciar sesión: {err}")
@@ -712,10 +427,6 @@ else:
     st.sidebar.success(f"Hola, **{st.session_state['user']}**")
     badge = '<span class="pro-badge">PRO</span>' if st.session_state["plan"] == "pro" else '<span class="free-badge">GRATIS</span>'
     st.sidebar.markdown(f"Plan: {badge}", unsafe_allow_html=True)
-
-    _tasa_actual, _tasa_en_vivo = obtener_tasa_cop_usd()
-    st.sidebar.caption(f"💱 Montos en COP y USD · 1 USD ≈ $ {_tasa_actual:,.0f} COP" + ("" if _tasa_en_vivo else " (tasa de respaldo, no en vivo)"))
-
     if st.session_state["plan"] != "pro":
         st.sidebar.markdown(
             f'<br><a href="{STRIPE_PAYMENT_LINK}" target="_blank" style="background-color:{PINO}; color:white; '
@@ -727,10 +438,8 @@ else:
                 supabase.auth.sign_out()
             except Exception:
                 pass
-        borrar_cookie_sesion()
         st.session_state["user"] = None
         st.session_state["plan"] = "free"
-        st.session_state["intento_restaurar_sesion"] = False
         st.rerun()
 
 def obtener_saludo():
@@ -790,15 +499,8 @@ def cargar_categorias(email):
 
 
 hogar = obtener_hogar(email) if supabase else None
-es_admin = email == ADMIN_EMAIL
 
-nombres_tabs = ["📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "🏆 Metas",
-                "💎 Patrimonio", "📚 Educación Financiera", "🏠 Mi Hogar", "⚖️ Legal"]
-if es_admin:
-    nombres_tabs.append("🛡️ Admin")
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(nombres_tabs)
-else:
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(nombres_tabs)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación Financiera", "🏠 Mi Hogar", "⚖️ Legal"])
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
@@ -850,9 +552,9 @@ with tab1:
         balance = total_ingreso - total_gasto
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("Ingresos del mes", f"{formatear_moneda(total_ingreso)}")
-        m2.metric("Gastos del mes", f"{formatear_moneda(total_gasto)}")
-        m3.metric("Balance", f"{formatear_moneda(balance)}", delta="Positivo" if balance >= 0 else "Negativo", delta_color="normal" if balance >= 0 else "inverse")
+        m1.metric("Ingresos del mes", f"${total_ingreso:,.0f}")
+        m2.metric("Gastos del mes", f"${total_gasto:,.0f}")
+        m3.metric("Balance", f"${balance:,.0f}", delta="Positivo" if balance >= 0 else "Negativo", delta_color="normal" if balance >= 0 else "inverse")
 
         # --- Medidor de salud financiera: síntesis visual, no otro número más ---
         tasa_ahorro = (balance / total_ingreso) if total_ingreso > 0 else 0
@@ -886,30 +588,13 @@ with tab1:
                                         textinfo="percent", textfont=dict(family="Inter", size=12, color="white")))
                 fig = estilo_grafico(fig, height=300)
                 fig.update_layout(showlegend=False)
-                fig.add_annotation(text=f"{formatear_moneda(gastos_mes.sum())}<br><span style='font-size:11px;color:{TEXTO_SUAVE}'>total</span>",
+                fig.add_annotation(text=f"${gastos_mes.sum():,.0f}<br><span style='font-size:11px;color:{TEXTO_SUAVE}'>total</span>",
                                     showarrow=False, font=dict(family="JetBrains Mono", size=18, color=TEXTO))
                 st.plotly_chart(fig, use_container_width=True)
-                chips = "".join(f'<span class="cat-chip">{icono_categoria(cat)} {cat} · {formatear_moneda_md(monto)}</span>' for cat, monto in gastos_mes.items())
+                chips = "".join(f'<span class="cat-chip">{icono_categoria(cat)} {cat} · ${monto:,.0f}</span>' for cat, monto in gastos_mes.items())
                 st.markdown(chips, unsafe_allow_html=True)
             else:
                 st.caption("Sin gastos categorizados este mes todavía.")
-
-        if es_pro and not presupuestos_activos.empty:
-            st.markdown("#### 🎯 Presupuesto restante este mes")
-            presupuesto_total = presupuestos_activos["presupuesto_mensual"].sum()
-            gastado_total_presupuestado = sum(gastos_por_cat_actual.get(f["name"], 0) for _, f in presupuestos_activos.iterrows())
-            restante_total = presupuesto_total - gastado_total_presupuestado
-            st.metric("Total restante (categorías con presupuesto)", f"{formatear_moneda(restante_total)}", delta=f"de {formatear_moneda(presupuesto_total)} presupuestados")
-            for _, fila in presupuestos_activos.iterrows():
-                gastado = gastos_por_cat_actual.get(fila["name"], 0)
-                presupuesto = fila["presupuesto_mensual"]
-                restante = presupuesto - gastado
-                pct = (gastado / presupuesto) if presupuesto > 0 else 0
-                color_barra = CORAL if pct > 1 else (GOLD if pct > 0.8 else SALVIA)
-                st.markdown(f"{icono_categoria(fila['name'])} **{fila['name']}** — {formatear_moneda_md(gastado)} de {formatear_moneda_md(presupuesto)} "
-                            f"({'te pasaste ' + formatear_moneda_md(abs(restante)) if restante < 0 else 'restante ' + formatear_moneda_md(restante)})",
-                            unsafe_allow_html=True)
-                st.markdown(barra_presupuesto(pct, color_barra), unsafe_allow_html=True)
 
         clave_celebracion = f"celebrado_{mes_actual}"
         if balance > 0 and puntaje_salud >= 75 and not st.session_state.get(clave_celebracion):
@@ -926,18 +611,6 @@ with tab1:
         resumen = generar_resumen_narrado(total_ingreso, total_gasto, balance, tasa_ahorro, tasa_ahorro_ant,
                                            comp_actual_base, comp_anterior_base, categoria_top)
         st.markdown(f'<div class="insight-card">📝 <b>Tu mes en resumen:</b> {resumen}</div>', unsafe_allow_html=True)
-
-        if es_pro:
-            recurrentes = detectar_recurrentes(df_tx, gasto_categorias)
-            if recurrentes:
-                with st.expander(f"🔍 {len(recurrentes)} posibles gastos recurrentes o suscripciones detectados"):
-                    st.caption("Detectado automáticamente: mismo concepto, monto similar, repetido en al menos 2 meses. Revisa si sigues usando todo esto.")
-                    total_recurrente_mensual = sum(r["monto_promedio"] for r in recurrentes)
-                    st.metric("Total estimado en recurrentes/mes", f"{formatear_moneda(total_recurrente_mensual)}")
-                    for r in recurrentes:
-                        etiqueta_frecuencia = "mensual" if r["consecutivo"] else "irregular"
-                        st.markdown(f"{icono_categoria(r['categoria'])} **{r['descripcion']}** — ~{formatear_moneda_md(r['monto_promedio'])}/mes · "
-                                    f"visto en {r['meses_detectados']} meses ({etiqueta_frecuencia})")
 
         if es_pro:
             st.markdown("#### Tendencia últimos 6 meses")
@@ -966,7 +639,7 @@ with tab1:
                     gastado = comp_actual.get(fila["name"], 0)
                     presupuesto = fila["presupuesto_mensual"]
                     if presupuesto and gastado > presupuesto:
-                        st.markdown(f'<div class="insight-card insight-alerta">{icono_categoria(fila["name"])} Ya superaste tu presupuesto de <b>{fila["name"]}</b>: {formatear_moneda_md(gastado)} de {formatear_moneda_md(presupuesto)}.</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="insight-card insight-alerta">{icono_categoria(fila["name"])} Ya superaste tu presupuesto de <b>{fila["name"]}</b>: ${gastado:,.0f} de ${presupuesto:,.0f}.</div>', unsafe_allow_html=True)
         else:
             st.info("✨ Los insights automáticos y la tendencia de 6 meses están en el plan Pro.")
 
@@ -1012,82 +685,10 @@ with tab2:
 
     st.divider()
     st.markdown("#### Movimientos recientes")
-    st.caption("Puedes editar monto, categoría, descripción o fecha directamente en la tabla, o eliminar una fila con el ícono 🗑️ — luego dale **Guardar cambios**. Para agregar movimientos nuevos usa el formulario de arriba, no esta tabla.")
     if not df_tx.empty:
-        todas_categorias = df_cat["name"].tolist() if not df_cat.empty else []
-
-        with st.expander("🔎 Buscar y filtrar", expanded=False):
-            fc1, fc2, fc3 = st.columns(3)
-            texto_busqueda = fc1.text_input("Buscar en descripción")
-            categorias_filtro = fc2.multiselect("Categorías", todas_categorias)
-            rango_fechas = fc3.date_input("Rango de fechas", value=(), key="rango_fechas_filtro")
-
-        df_filtrado = df_tx.copy()
-        if texto_busqueda:
-            df_filtrado = df_filtrado[df_filtrado["descripcion"].fillna("").str.contains(texto_busqueda, case=False, na=False)]
-        if categorias_filtro:
-            df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categorias_filtro)]
-        if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
-            df_filtrado = df_filtrado[(df_filtrado["fecha"] >= pd.Timestamp(rango_fechas[0])) & (df_filtrado["fecha"] <= pd.Timestamp(rango_fechas[1]))]
-
-        if texto_busqueda or categorias_filtro or (isinstance(rango_fechas, tuple) and len(rango_fechas) == 2):
-            st.caption(f"{len(df_filtrado)} movimiento(s) encontrados · suma: {formatear_moneda_md(df_filtrado['monto'].sum())}")
-
-        df_editable = df_filtrado[["id", "fecha", "categoria", "descripcion", "monto"]].head(100).copy()
-        df_editable["fecha"] = df_editable["fecha"].dt.date
-
-        df_editado = st.data_editor(
-            df_editable,
-            column_order=["fecha", "categoria", "descripcion", "monto"],
-            column_config={
-                "id": None,
-                "fecha": st.column_config.DateColumn("Fecha"),
-                "categoria": st.column_config.SelectboxColumn("Categoría", options=todas_categorias),
-                "descripcion": st.column_config.TextColumn("Descripción"),
-                "monto": st.column_config.NumberColumn("Monto", format="$%.2f", help="Negativo = gasto, positivo = ingreso"),
-            },
-            num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_transacciones",
-        )
-
-        if st.button("💾 Guardar cambios en movimientos"):
-            ids_originales = set(df_editable["id"])
-            ids_editados = set(df_editado["id"].dropna())
-            eliminados = ids_originales - ids_editados
-            errores = []
-            for id_del in eliminados:
-                try:
-                    supabase.table("transactions").delete().eq("id", id_del).execute()
-                except Exception as e:
-                    errores.append(str(e))
-
-            for _, fila in df_editado.iterrows():
-                if pd.isna(fila.get("id")):
-                    continue  # fila nueva agregada en la tabla sin pasar por el formulario: se ignora
-                original = df_editable[df_editable["id"] == fila["id"]]
-                if original.empty:
-                    continue
-                orig = original.iloc[0]
-                cambios = {}
-                if float(fila["monto"]) != float(orig["monto"]):
-                    cambios["monto"] = float(fila["monto"])
-                if fila["categoria"] != orig["categoria"]:
-                    cambios["categoria"] = fila["categoria"]
-                if fila["descripcion"] != orig["descripcion"]:
-                    cambios["descripcion"] = fila["descripcion"]
-                if pd.Timestamp(fila["fecha"]) != pd.Timestamp(orig["fecha"]):
-                    cambios["fecha"] = fila["fecha"].isoformat()
-                if cambios:
-                    try:
-                        supabase.table("transactions").update(cambios).eq("id", fila["id"]).execute()
-                    except Exception as e:
-                        errores.append(str(e))
-
-            if errores:
-                st.error(f"Algunos cambios no se pudieron guardar: {'; '.join(errores)}")
-            else:
-                st.success("Cambios guardados.")
-                st.cache_data.clear()
-                st.rerun()
+        df_mostrar = df_tx[["fecha", "categoria", "descripcion", "monto"]].head(20).copy()
+        df_mostrar["categoria"] = df_mostrar["categoria"].apply(lambda c: f"{icono_categoria(c)} {c}" if pd.notna(c) else c)
+        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
     else:
         st.caption("Sin movimientos todavía.")
 
@@ -1177,96 +778,6 @@ with tab4:
                 st.error(f"No se pudo agregar: {e}")
 
 with tab5:
-    st.subheader("🏆 Metas de ahorro")
-    if not es_pro:
-        st.info("✨ Las metas de ahorro están en el plan Pro.")
-    else:
-        st.caption("Crea una meta, y cada vez que apartes dinero para ella, actualiza el avance. No mueve dinero real — es un marcador visual para que sigas tu progreso.")
-        with st.form("form_meta", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            nombre_meta = c1.text_input("Nombre (ej: Viaje a Cancún)")
-            monto_meta = c2.number_input("Monto objetivo", min_value=0.0, step=100.0)
-            fecha_meta = c3.date_input("Fecha objetivo (opcional)", value=None)
-            compartir_meta = st.checkbox(f"Compartir con mi hogar ({hogar['nombre']})") if hogar else False
-            if st.form_submit_button("Crear meta"):
-                if nombre_meta and monto_meta > 0:
-                    ok, err = crear_meta(email, nombre_meta, monto_meta, fecha_meta, hogar["id"] if (compartir_meta and hogar) else None)
-                    if ok:
-                        st.success("Meta creada.")
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error(f"No se pudo crear: {err}")
-                else:
-                    st.error("Ingresa un nombre y un monto objetivo mayor a 0.")
-
-        st.divider()
-        df_metas = cargar_metas()
-        df_metas_visibles = df_metas[(df_metas["user_email"] == email) | (df_metas["household_id"] == (hogar["id"] if hogar else None))] if not df_metas.empty else df_metas
-        if df_metas_visibles.empty:
-            st.caption("Aún no tienes metas. Crea la primera arriba.")
-        else:
-            for _, meta in df_metas_visibles.iterrows():
-                pct = (meta["monto_actual"] / meta["monto_objetivo"]) if meta["monto_objetivo"] > 0 else 0
-                col_a, col_b = st.columns([3, 1])
-                with col_a:
-                    etiqueta_fecha = f" · meta: {meta['fecha_objetivo']}" if pd.notna(meta.get("fecha_objetivo")) else ""
-                    st.markdown(f"🏆 **{meta['nombre']}** — {formatear_moneda_md(meta['monto_actual'])} de {formatear_moneda_md(meta['monto_objetivo'])} ({pct*100:.0f}%){etiqueta_fecha}")
-                    st.markdown(barra_presupuesto(pct, SALVIA if pct < 1 else GOLD), unsafe_allow_html=True)
-                with col_b:
-                    nuevo_avance = st.number_input("Actualizar a $", min_value=0.0, value=float(meta["monto_actual"]), step=50.0,
-                                                     key=f"avance_{meta['id']}", label_visibility="collapsed")
-                    if st.button("Guardar", key=f"guardar_meta_{meta['id']}"):
-                        actualizar_avance_meta(meta["id"], nuevo_avance)
-                        st.cache_data.clear()
-                        st.rerun()
-                    if st.button("Eliminar meta", key=f"del_meta_{meta['id']}"):
-                        eliminar_meta(meta["id"])
-                        st.cache_data.clear()
-                        st.rerun()
-
-with tab6:
-    st.subheader("💎 Patrimonio neto")
-    if not es_pro:
-        st.info("✨ El seguimiento de patrimonio neto está en el plan Pro.")
-    else:
-        st.caption("Un vistazo de lo que tienes (cuentas, propiedades, inversiones) menos lo que debes (tarjetas, préstamos). Siempre personal, no se comparte con el hogar.")
-        df_patrimonio = cargar_patrimonio(email)
-        total_activos = df_patrimonio[df_patrimonio["tipo"] == "activo"]["monto"].sum() if not df_patrimonio.empty else 0
-        total_pasivos = df_patrimonio[df_patrimonio["tipo"] == "pasivo"]["monto"].sum() if not df_patrimonio.empty else 0
-        patrimonio_neto = total_activos - total_pasivos
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Activos", f"{formatear_moneda(total_activos)}")
-        m2.metric("Pasivos", f"{formatear_moneda(total_pasivos)}")
-        m3.metric("Patrimonio neto", f"{formatear_moneda(patrimonio_neto)}", delta="Positivo" if patrimonio_neto >= 0 else "Negativo", delta_color="normal" if patrimonio_neto >= 0 else "inverse")
-
-        with st.form("form_patrimonio", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            nombre_item = c1.text_input("Nombre (ej: Cuenta de ahorro, Tarjeta Visa)")
-            tipo_item = c2.radio("Tipo", ["Activo", "Pasivo"], horizontal=True)
-            monto_item = c3.number_input("Monto", min_value=0.0, step=100.0, key="monto_patrimonio")
-            if st.form_submit_button("Agregar"):
-                if nombre_item and monto_item >= 0:
-                    ok, err = agregar_item_patrimonio(email, nombre_item, "activo" if tipo_item == "Activo" else "pasivo", monto_item)
-                    if ok:
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error(f"No se pudo agregar: {err}")
-
-        if not df_patrimonio.empty:
-            st.divider()
-            for _, item in df_patrimonio.iterrows():
-                icono_item = "💰" if item["tipo"] == "activo" else "💳"
-                col_a, col_b = st.columns([4, 1])
-                col_a.write(f"{icono_item} {item['nombre']} — {formatear_moneda_md(item['monto'])}")
-                if col_b.button("Quitar", key=f"del_patrimonio_{item['id']}"):
-                    eliminar_item_patrimonio(item["id"])
-                    st.cache_data.clear()
-                    st.rerun()
-
-with tab7:
     st.subheader("📚 Educación Financiera")
     st.caption("Información general para entender mejor tus finanzas. Esto NO es asesoría de inversión ni una recomendación personalizada — para eso, habla con un asesor financiero certificado.")
     conceptos = [
@@ -1280,7 +791,7 @@ with tab7:
         with st.expander(titulo):
             st.write(texto)
 
-with tab8:
+with tab6:
     st.subheader("🏠 Mi Hogar")
     st.caption("Comparte presupuesto con tu pareja o familia sin perder la opción de tener gastos personales privados. Cada quien decide, gasto por gasto, si lo comparte o no.")
 
@@ -1330,7 +841,7 @@ with tab8:
         st.divider()
         st.caption("💡 Cuando registres un gasto en la pestaña ➕ Registrar, verás la opción de marcarlo como compartido con el hogar. Los gastos que no marques siguen siendo privados, solo tú los ves.")
 
-with tab9:
+with tab7:
     st.subheader("⚖️ Legal")
     st.warning("⚠️ **Importante:** este texto es una plantilla de referencia generada para acelerar el arranque del producto. **No reemplaza la revisión de un abogado** antes de operar con usuarios reales o cobrar dinero. Ajusta jurisdicción, datos de contacto y cláusulas específicas de tu país antes de publicarlo como definitivo.")
 
@@ -1386,51 +897,3 @@ Para dudas sobre privacidad: [agrega aquí tu correo de contacto real].
         """)
 
     st.info("💡 **Recordatorio permanente:** todo lo que ves en la pestaña 'Contexto Económico' del Resumen son datos públicos con fines educativos — no una señal de compra o venta. Para decisiones de inversión, consulta a un asesor financiero certificado en tu país.")
-
-if es_admin:
-    with tab10:
-        st.subheader("🛡️ Panel de Administrador")
-        st.warning("⚠️ Acceso total a datos de todos los usuarios. Verificado del lado del servidor (funciones SQL), no solo por este correo mostrado en pantalla — pero úsalo con la misma disciplina que esperarías de cualquiera con este nivel de acceso.")
-
-        st.markdown("#### 👥 Usuarios y planes")
-        df_usuarios = admin_listar_usuarios()
-        if not df_usuarios.empty:
-            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
-            with st.form("form_admin_plan"):
-                c1, c2 = st.columns(2)
-                correo_objetivo = c1.selectbox("Usuario", df_usuarios["user_email"].tolist())
-                nuevo_estado = c2.selectbox("Nuevo estado", ["free", "pro"])
-                if st.form_submit_button("Actualizar plan"):
-                    ok, err = admin_actualizar_plan(correo_objetivo, nuevo_estado)
-                    if ok:
-                        st.success(f"{correo_objetivo} actualizado a {nuevo_estado}.")
-                        st.rerun()
-                    else:
-                        st.error(f"No se pudo actualizar: {err}")
-        else:
-            st.caption("Sin usuarios registrados todavía.")
-
-        st.divider()
-        st.markdown("#### 🏠 Hogares")
-        df_hogares_admin = admin_listar_hogares()
-        if not df_hogares_admin.empty:
-            st.dataframe(df_hogares_admin, use_container_width=True, hide_index=True)
-        else:
-            st.caption("Sin hogares creados todavía.")
-
-        st.divider()
-        st.markdown("#### 💳 Todas las transacciones")
-        limite_admin = st.number_input("Cantidad a mostrar", min_value=10, max_value=1000, value=200, step=50)
-        df_tx_admin = admin_listar_transacciones(int(limite_admin))
-        if not df_tx_admin.empty:
-            st.dataframe(df_tx_admin[["fecha", "user_email", "categoria", "descripcion", "monto", "fuente"]], use_container_width=True, hide_index=True)
-            id_borrar = st.selectbox("ID a eliminar (si hace falta)", df_tx_admin["id"].tolist())
-            if st.button("🗑️ Eliminar esta transacción", type="primary"):
-                ok, err = admin_eliminar_transaccion(id_borrar)
-                if ok:
-                    st.success("Transacción eliminada.")
-                    st.rerun()
-                else:
-                    st.error(f"No se pudo eliminar: {err}")
-        else:
-            st.caption("Sin transacciones todavía.")
