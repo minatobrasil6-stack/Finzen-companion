@@ -10,7 +10,7 @@ from datetime import date
 # ============================================================
 # CONFIGURACIÓN DE ADMINISTRADOR
 # ============================================================
-ADMIN_EMAIL = "tu-correo@ejemplo.com"  # <--- Reemplaza con tu correo real para activar el admin
+ADMIN_EMAIL = "minatobrasil6@gmail.com"  # <--- Reemplaza con tu correo real para activar el admin
 
 # ============================================================
 # FINZEN — app.py
