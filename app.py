@@ -8,88 +8,13 @@ import requests
 from datetime import date
 
 # ============================================================
-# CONFIGURACIÓN DE SEGURIDAD Y PERFIL
+# CONFIGURACIÓN DE ADMINISTRADOR
 # ============================================================
-ADMIN_EMAIL = "minatobrasil6@gmail.com" # <--- CAMBIA ESTO POR TU EMAIL REAL
-
-# ... (Mantén toda la lógica anterior de importaciones y paleta de colores igual) ...
-
-# ============================================================
-# MODIFICACIÓN: SIDEBAR CON PANEL ADMIN
-# ============================================================
-if not st.session_state["user"]:
-    # ... (código de login existente) ...
-    pass
-else:
-    # Mostrar nombre en lugar de correo
-    nombre_usuario = st.session_state["user"].split("@")[0].capitalize()
-    st.sidebar.success(f"Hola, **{nombre_usuario}**")
-
-    # Panel Admin visible solo para ti
-    if st.session_state["user"] == ADMIN_EMAIL:
-        with st.sidebar.expander("🛡️ Panel de Administrador"):
-            st.write("Herramientas exclusivas:")
-            if st.button("Limpiar Caché Global"):
-                st.cache_data.clear()
-                st.success("Caché limpia")
-    
-    # ... (resto del sidebar: Plan Pro, Logout, etc) ...
-
-# ============================================================
-# MODIFICACIÓN: TAB PRESUPUESTOS (Gestión y Comparativa)
-# ============================================================
-with tab4:
-    st.subheader("🎯 Presupuestos y Control")
-
-    if not es_pro:
-        st.info("✨ Funcionalidad Pro.")
-    elif df_cat.empty:
-        st.caption("Aún no tienes categorías.")
-    else:
-        # A. Comparativa Presupuesto vs Gasto
-        st.markdown("#### 📊 Comparativa Actual")
-        
-        # Calcular gastos por categoría del mes actual
-        gastos_actuales = df_mes.groupby("categoria")["monto"].sum().abs()
-        
-        presupuestos_df = df_cat[df_cat["tipo"] == "gasto"].copy()
-        presupuestos_df["Gastado"] = presupuestos_df["name"].map(gastos_actuales).fillna(0)
-        
-        # Mostrar tabla comparativa
-        st.dataframe(
-            presupuestos_df[["name", "presupuesto_mensual", "Gastado"]].rename(
-                columns={"name": "Categoría", "presupuesto_mensual": "Presupuesto"}
-            ),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.divider()
-        st.markdown("#### ⚙️ Editar o Eliminar Categorías")
-        
-        # B. Eliminar Categoría
-        cat_a_borrar = st.selectbox("Selecciona para eliminar:", presupuestos_df["name"].tolist())
-        if st.button("🗑️ Eliminar categoría seleccionada"):
-            if supabase:
-                supabase.table("categories").delete().eq("name", cat_a_borrar).eq("user_email", email).execute()
-                st.success(f"Categoría '{cat_a_borrar}' eliminada.")
-                st.rerun()
-
-        st.divider()
-        # C. Edición (lo que ya tenías)
-        # ... (Mantén aquí el bucle para editar presupuestos) ...
-
-# ... (El resto del código se mantiene igual) ...
-
+ADMIN_EMAIL = "tu-correo@ejemplo.com"  # <--- Reemplaza con tu correo real para activar el admin
 
 # ============================================================
 # FINZEN — app.py
-# Versión consolidada:
-# - UI cálida y responsive, inspirada en el diseño de la captura.
-# - COP/USD con tipo de cambio real consultado desde una API pública.
-# - Todos los KPIs y gráficos respetan la moneda seleccionada.
-# - Corrección de strings HTML/f-strings para evitar SyntaxError.
-# - Supabase opcional: funciona en modo demo si no está configurado.
+# Versión consolidada y actualizada
 # ============================================================
 
 try:
@@ -318,53 +243,6 @@ section[data-testid="stSidebar"] {{
     color: {TEXTO};
     margin: 3px 4px 3px 0;
 }}
-
-.total-card {{
-    background: {TARJETA};
-    border: 1px solid {BORDE};
-    border-radius: 20px;
-    padding: 12px;
-}}
-
-@media (max-width: 768px) {{
-    .block-container {{
-        padding: 1rem .75rem 4rem .75rem !important;
-    }}
-
-    .hero-banner {{
-        padding: 22px 20px;
-        border-radius: 20px;
-    }}
-
-    .hero-banner h1 {{
-        font-size: 24px !important;
-    }}
-
-    h2 {{
-        font-size: 23px !important;
-    }}
-
-    h3 {{
-        font-size: 19px !important;
-    }}
-
-    div[data-testid="stMetric"] {{
-        padding: 12px 10px;
-    }}
-
-    div[data-testid="stMetricValue"] {{
-        font-size: 20px !important;
-    }}
-
-    .cat-chip {{
-        font-size: 12px;
-        padding: 6px 9px;
-    }}
-
-    [data-testid="stHorizontalBlock"] {{
-        gap: .55rem !important;
-    }}
-}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -403,13 +281,6 @@ REGLAS_CATEGORIZACION = {
 # ============================================================
 @st.cache_data(ttl=900, show_spinner=False)
 def obtener_tipo_cambio_usd_cop():
-    """
-    Obtiene el tipo de cambio USD/COP desde una API pública.
-    La primera fuente usa ER-API y la segunda Frankfurter como respaldo.
-    No es un precio ejecutable de un broker; es una tasa de referencia
-    actualizada por el proveedor.
-    """
-    # Fuente primaria
     try:
         r = requests.get(
             "https://open.er-api.com/v6/latest/USD",
@@ -424,7 +295,6 @@ def obtener_tipo_cambio_usd_cop():
     except Exception:
         pass
 
-    # Respaldo
     try:
         r = requests.get(
             "https://api.frankfurter.app/latest?from=USD&to=COP",
@@ -454,7 +324,6 @@ def tasa_usd_cop():
 
 
 def a_moneda(valor_cop):
-    """Convierte un valor almacenado en COP a la moneda visual elegida."""
     valor = float(valor_cop or 0)
     if st.session_state["moneda"] == "USD":
         return valor / tasa_usd_cop()
@@ -462,7 +331,6 @@ def a_moneda(valor_cop):
 
 
 def a_cop(valor, moneda=None):
-    """Convierte un valor introducido por el usuario a COP para almacenarlo."""
     moneda_real = moneda or st.session_state["moneda"]
     valor = float(valor or 0)
     if moneda_real == "USD":
@@ -1103,9 +971,17 @@ elif not st.session_state["user"]:
             else:
                 st.sidebar.error("Ingresa correo y contraseña.")
 else:
-    st.sidebar.success(
-        f"Hola, **{st.session_state['user']}**"
-    )
+    # ── MODIFICACIÓN: Mostrar el NOMBRE en lugar del correo ──
+    nombre_usuario = st.session_state["user"].split("@")[0].capitalize()
+    st.sidebar.success(f"Hola, **{nombre_usuario}**")
+
+    # ── MODIFICACIÓN: Panel de Administrador exclusivo ──
+    if st.session_state["user"] == ADMIN_EMAIL:
+        with st.sidebar.expander("🛡️ Panel de Administrador"):
+            st.write("Herramientas exclusivas activas.")
+            if st.button("Limpiar Caché Global"):
+                st.cache_data.clear()
+                st.success("Caché limpiada correctamente.")
 
     badge = (
         '<span class="pro-badge">PRO</span>'
@@ -1261,7 +1137,6 @@ else:
 with tab1:
     st.subheader("Tu mes de un vistazo")
 
-    # Tarjeta de tipo de cambio
     if tc_usd_cop:
         st.markdown(
             f"""
@@ -1343,8 +1218,6 @@ están en zona de alerta.
             else set()
         )
 
-        # Si por algún motivo no existen categorías todavía, respetamos
-        # el signo almacenado de las transacciones como respaldo.
         if not gasto_categorias:
             gasto_mask = df_mes["monto"] < 0
         else:
@@ -1369,9 +1242,6 @@ están en zona de alerta.
 
         balance = total_ingreso - total_gasto
 
-        # ====================================================
-        # KPIs
-        # ====================================================
         m1, m2, m3 = st.columns(3)
 
         m1.metric(
@@ -1439,9 +1309,6 @@ están en zona de alerta.
             )
         )
 
-        # ====================================================
-        # SALUD + DONA
-        # ====================================================
         col_gauge, col_dona = st.columns([0.9, 1.45])
 
         with col_gauge:
@@ -1558,9 +1425,6 @@ están en zona de alerta.
                     "Sin gastos categorizados este mes todavía."
                 )
 
-        # ====================================================
-        # RESUMEN NARRADO
-        # ====================================================
         total_ingreso_ant = (
             df_mes_ant[
                 df_mes_ant["categoria"].isin(
@@ -1612,9 +1476,6 @@ están en zona de alerta.
             unsafe_allow_html=True,
         )
 
-        # ====================================================
-        # TENDENCIA PRO
-        # ====================================================
         if es_pro:
             st.markdown("#### Tendencia últimos 6 meses")
 
@@ -2094,9 +1955,6 @@ with tab3:
                     ]
                 )
 
-                # El banco puede exportar cargos como positivos.
-                # Conservamos el signo del CSV. Si es positivo y la
-                # categoría es de gasto, se transforma a negativo.
                 df_prev["categoria"] = (
                     df_prev["descripcion"]
                     .apply(auto_categorizar)
@@ -2198,12 +2056,10 @@ with tab3:
 
 
 # ============================================================
-# PRESUPUESTOS
+# PRESUPUESTOS (Con Presupuesto vs Gasto y Eliminar Categoría)
 # ============================================================
 with tab4:
-    st.subheader(
-        "🎯 Presupuestos mensuales por categoría"
-    )
+    st.subheader("🎯 Presupuestos y Control por Categoría")
 
     if not es_pro:
         st.info(
@@ -2214,6 +2070,33 @@ with tab4:
             "Aún no tienes categorías."
         )
     else:
+        # ── NUEVO: Tabla comparativa Presupuesto vs Gasto ──
+        st.markdown("#### 📊 Presupuesto vs. Gasto Actual")
+        
+        # Calcular gastos reales del mes actual
+        hoy = pd.Timestamp.today()
+        mes_actual = hoy.to_period("M")
+        df_tx_copia = df_tx.copy()
+        if not df_tx_copia.empty and "fecha" in df_tx_copia.columns:
+            df_tx_copia["mes"] = pd.to_datetime(df_tx_copia["fecha"]).dt.to_period("M")
+            df_mes_actual = df_tx_copia[df_tx_copia["mes"] == mes_actual]
+            gastos_reales_cat = df_mes_actual.groupby("categoria")["monto"].sum().abs()
+        else:
+            gastos_reales_cat = pd.Series(dtype=float)
+
+        tabla_comparativa = df_cat[df_cat["tipo"] == "gasto"].copy()
+        tabla_comparativa["Gastado"] = tabla_comparativa["name"].map(gastos_reales_cat).fillna(0)
+        
+        # Mostrar tabla organizada
+        df_mostrar_comp = tabla_comparativa[["name", "presupuesto_mensual", "Gastado"]].copy()
+        df_mostrar_comp["presupuesto_mensual"] = df_mostrar_comp["presupuesto_mensual"].fillna(0).apply(dinero)
+        df_mostrar_comp["Gastado"] = df_mostrar_comp["Gastado"].apply(dinero)
+        df_mostrar_comp.columns = ["Categoría", "Presupuesto", "Gasto Actual"]
+        
+        st.dataframe(df_mostrar_comp, use_container_width=True, hide_index=True)
+        st.divider()
+
+        st.markdown("#### ⚙️ Ajustar Presupuestos")
         for _, fila in df_cat[
             df_cat["tipo"] == "gasto"
         ].iterrows():
@@ -2312,6 +2195,25 @@ with tab4:
                 st.error(
                     f"No se pudo agregar: {e}"
                 )
+
+        # ── NUEVO: Opción para eliminar categoría ──
+        st.divider()
+        st.markdown("#### 🗑️ Eliminar Categoría")
+        
+        categorias_disponibles_borrar = df_cat["name"].tolist() if not df_cat.empty else []
+        if categorias_disponibles_borrar:
+            cat_a_borrar = st.selectbox("Selecciona la categoría a eliminar", categorias_disponibles_borrar, key="select_borrar_cat")
+            
+            if st.button("Eliminar categoría seleccionada", key="btn_borrar_cat"):
+                try:
+                    supabase.table("categories").delete().eq("name", cat_a_borrar).eq("user_email", email).execute()
+                    st.success(f"La categoría '{cat_a_borrar}' ha sido eliminada.")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"No se pudo eliminar la categoría: {e}")
+        else:
+            st.caption("No hay categorías disponibles para eliminar.")
 
 
 # ============================================================
