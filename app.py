@@ -326,8 +326,11 @@ for key, default in [("user", None), ("plan", "free"), ("moneda", "COP"), ("inte
 NOMBRE_COOKIE_SESION = "finzen_refresh_token"
 
 
-@st.cache_resource
 def get_cookie_manager():
+    """Sin @st.cache_resource a propósito: CookieManager crea un widget/componente
+    internamente, y Streamlit no permite widgets dentro de funciones cacheadas
+    (CachedWidgetWarning). Es liviano, no necesita cachearse — se puede llamar
+    en cada rerun sin problema real de rendimiento."""
     return stx.CookieManager(key="finzen_cookie_manager") if COOKIES_AVAILABLE else None
 
 
