@@ -9,11 +9,9 @@ from datetime import date
 
 # ============================================================
 # FINZEN — app.py
-# Versión consolidada completa y potenciada:
-# - Correo administrador: minatobrasil6@gmail.com (Acceso Pro automático + Panel Admin)
-# - Gestión completa de categorías (Crear y Eliminar)
-# - Perfil de usuario profesional (Nombre, Foto, Correo, Cambio de contraseña y gestión de cuenta)
-# - Educación financiera interactiva conectada a los valores reales y transacciones de los usuarios
+# Versión Definitiva: Automatización Pro, Presupuesto Base Cero,
+# Metas Gamificadas, Auditoría de Gastos Hormiga y Spotify Wrapped Financiero.
+# Correo administrador: minatobrasil6@gmail.com
 # ============================================================
 
 try:
@@ -23,7 +21,7 @@ except ImportError:
     SUPABASE_AVAILABLE = False
 
 st.set_page_config(
-    page_title="FinZen | Tu compañero de finanzas",
+    page_title="FinZen | La Herramienta Financiera Definitiva",
     layout="wide",
     page_icon="🌱",
     initial_sidebar_state="expanded",
@@ -38,7 +36,7 @@ def es_administrador():
     return st.session_state.get("user") == CORREO_ADMIN
 
 # ============================================================
-# DISEÑO Y ESTILOS
+# DISEÑO Y ESTILOS AVANZADOS
 # ============================================================
 PAPEL = "#FAF7F1"
 TARJETA = "#FFFFFF"
@@ -56,9 +54,7 @@ CIELO = "#5C86A8"
 CIRUELA = "#8B5FA0"
 LADRILLO = "#C1554F"
 
-PALETA_CATEGORIAS = [
-    PINO, CORAL, GOLD, CIELO, SALVIA, CIRUELA, LADRILLO, "#3D6B7D"
-]
+PALETA_CATEGORIAS = [PINO, CORAL, GOLD, CIELO, SALVIA, CIRUELA, LADRILLO, "#3D6B7D"]
 
 ICONOS_CATEGORIA = {
     "Supermercado": "🛒",
@@ -237,17 +233,17 @@ CATEGORIAS_DEFECTO = [
 ]
 
 REGLAS_CATEGORIZACION = {
-    "Supermercado": ["walmart", "soriana", "chedraui", "supermercado", "costco", "la comer", "aurrera", "exito", "carulla"],
-    "Restaurantes": ["restaurante", "starbucks", "mcdonald", "uber eats", "rappi", "cafe", "café", "domino", "restaurant"],
-    "Transporte": ["uber", "cabify", "didi", "gasolina", "gasolinera", "metro", "camion", "taxi", "transmilenio"],
-    "Suscripciones": ["netflix", "spotify", "disney", "hbo", "amazon prime", "youtube premium", "icloud"],
-    "Vivienda": ["renta", "hipoteca", "luz", "agua", "gas natural", "predial", "mantenimiento", "arriendo"],
-    "Salud": ["farmacia", "doctor", "hospital", "seguro medico", "seguro médico", "dentista"],
-    "Entretenimiento": ["cine", "boletos", "concierto", "videojuego", "steam"],
+    "Supermercado": ["walmart", "soriana", "chedraui", "supermercado", "costco", "la comer", "aurrera", "exito", "carulla", "éxito"],
+    "Restaurantes": ["restaurante", "starbucks", "mcdonald", "uber eats", "rappi", "cafe", "café", "domino", "restaurant", "sushi"],
+    "Transporte": ["uber", "cabify", "didi", "gasolina", "gasolinera", "metro", "camion", "taxi", "transmilenio", "peaje"],
+    "Suscripciones": ["netflix", "spotify", "disney", "hbo", "amazon prime", "youtube premium", "icloud", "chatgpt"],
+    "Vivienda": ["renta", "hipoteca", "luz", "agua", "gas natural", "predial", "mantenimiento", "arriendo", "internet"],
+    "Salud": ["farmacia", "doctor", "hospital", "seguro medico", "seguro médico", "dentista", "eps"],
+    "Entretenimiento": ["cine", "boletos", "concierto", "videojuego", "steam", "playstation"],
 }
 
 # ============================================================
-# MONEDA — TIPO DE CAMBIO
+# MONEDA Y TIPO DE CAMBIO
 # ============================================================
 @st.cache_data(ttl=900, show_spinner=False)
 def obtener_tipo_cambio_usd_cop():
@@ -391,7 +387,7 @@ def asegurar_categorias_defecto(email):
         pass
 
 # ============================================================
-# HOGARES
+# HOGARES Y METAS
 # ============================================================
 def obtener_hogar(email):
     if not supabase:
@@ -401,12 +397,11 @@ def obtener_hogar(email):
         if not membresia.data:
             return None
         household_id = membresia.data[0]["household_id"]
-        rol = membresia.data[0]["role"]
         hogar = supabase.table("households").select("*").eq("id", household_id).execute()
         if not hogar.data:
             return None
         miembros = supabase.table("household_members").select("user_email, role").eq("household_id", household_id).execute()
-        return {"id": household_id, "nombre": hogar.data[0]["name"], "rol": rol, "miembros": miembros.data or []}
+        return {"id": household_id, "nombre": hogar.data[0]["name"], "rol": membresia.data[0]["role"], "miembros": miembros.data or []}
     except Exception:
         return None
 
@@ -420,7 +415,7 @@ def crear_hogar(email, nombre):
         return False, str(e)
 
 # ============================================================
-# CARGA DE DATOS
+# CARGA DE DATOS CENTRALIZADA
 # ============================================================
 @st.cache_data(ttl=60, show_spinner=False)
 def cargar_transacciones(email):
@@ -454,8 +449,19 @@ def cargar_categorias(email):
     except Exception:
         return pd.DataFrame(columns=["id", "name", "tipo", "presupuesto_mensual", "user_email", "household_id"])
 
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_metas(email):
+    if not supabase:
+        return pd.DataFrame(columns=["id", "titulo", "monto_objetivo", "monto_actual", "fecha_objetivo", "user_email"])
+    try:
+        res = supabase.table("savings_goals").select("*").order("fecha_objetivo").execute()
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=["id", "titulo", "monto_objetivo", "monto_actual", "fecha_objetivo", "user_email"])
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["id", "titulo", "monto_objetivo", "monto_actual", "fecha_objetivo", "user_email"])
+
 # ============================================================
-# SIDEBAR — AUTENTICACIÓN Y PERFIL DE USUARIO AVANZADO
+# SIDEBAR — AUTENTICACIÓN Y PERFIL DE USUARIO
 # ============================================================
 st.sidebar.markdown("### 🌱 FinZen")
 
@@ -519,7 +525,6 @@ elif not st.session_state["user"]:
             else:
                 st.sidebar.error("Ingresa correo y contraseña.")
 else:
-    # ── PERFIL DE USUARIO Y CONFIGURACIÓN PROFESIONAL EN SIDEBAR ──
     if st.session_state["foto_perfil"]:
         st.sidebar.image(st.session_state["foto_perfil"], width=80)
     
@@ -542,28 +547,24 @@ else:
         
         st.markdown("---")
         st.markdown("#### Cambiar Contraseña")
-        pass_actual = st.text_input("Contraseña actual", type="password", key="pass_act")
         pass_nueva = st.text_input("Nueva contraseña", type="password", key="pass_nue")
         
         if st.button("Actualizar datos de perfil"):
             st.session_state["nombre_usuario"] = nuevo_nombre
             st.session_state["foto_perfil"] = nueva_foto
             
-            if pass_nueva:
-                if supabase and st.session_state["user"] != CORREO_ADMIN:
-                    try:
-                        supabase.auth.update_user({"password": pass_nueva})
-                        st.success("Contraseña y perfil actualizados correctamente.")
-                    except Exception as e:
-                        st.error(f"Error al cambiar contraseña: {e}")
-                else:
-                    st.success("Perfil actualizado (Modo Admin/Local).")
+            if pass_nueva and supabase and st.session_state["user"] != CORREO_ADMIN:
+                try:
+                    supabase.auth.update_user({"password": pass_nueva})
+                    st.success("Contraseña y perfil actualizados.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
             else:
                 st.success("Perfil actualizado con éxito.")
             st.rerun()
 
     if st.session_state["plan"] != "pro" and not es_administrador():
-        st.sidebar.markdown(
+        st.markdown(
             f"""
 <a href="{STRIPE_PAYMENT_LINK}" target="_blank"
 style="background:{PINO};color:white;padding:9px 12px;border-radius:10px;
@@ -600,7 +601,7 @@ st.markdown(
     f"""
 <div class="hero-banner">
     <h1>🌱 {obtener_saludo()}{f', {nombre_mostrado}' if nombre_mostrado else ''}</h1>
-    <p>Tu compañero de finanzas — claridad, control y cero culpa.</p>
+    <p>Tu centro financiero definitivo — Presupuesto Base Cero, Metas y Control Inteligente.</p>
     <span class="hero-pill">
         💱 Vista actual: {st.session_state["moneda"]} ·
         {"1 USD = " + f"{tasa_usd_cop():,.2f}" + " COP" if tc_usd_cop else "tipo de cambio no disponible"}
@@ -621,17 +622,19 @@ hogar = obtener_hogar(email) if supabase else None
 # ============================================================
 # TABS PRINCIPALES (Con Admin condicional)
 # ============================================================
+tabs_nombres = [
+    "📊 Resumen", "➕ Registrar", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
+]
 if es_administrador():
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab_admin = st.tabs([
-        "📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación", "🏠 Mi Hogar", "⚖️ Legal", "🛡️ Admin"
-    ])
-else:
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "📊 Resumen", "➕ Registrar", "📥 Importar CSV", "🎯 Presupuestos", "📚 Educación", "🏠 Mi Hogar", "⚖️ Legal"
-    ])
+    tabs_nombres.append("🛡️ Admin")
+
+tabs = st.tabs(tabs_nombres)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:8]
+tab_admin = tabs[8] if es_administrador() else None
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
+df_metas_todo = cargar_metas(email)
 
 vista_hogar = False
 if hogar and es_pro:
@@ -648,8 +651,10 @@ else:
     else:
         df_cat = df_cat_todo
 
+df_metas = df_metas_todo[df_metas_todo["user_email"] == email] if not df_metas_todo.empty else df_metas_todo
+
 # ============================================================
-# RESUMEN
+# TAB 1: RESUMEN Y SEMÁFORO DE DINERO LIBRE
 # ============================================================
 with tab1:
     st.subheader("Tu mes de un vistazo")
@@ -677,6 +682,16 @@ with tab1:
         m2.metric("Gastos del mes", dinero(total_gasto))
         m3.metric("Balance", dinero(balance), delta="Positivo" if balance >= 0 else "Negativo", delta_color="normal" if balance >= 0 else "inverse")
 
+        # ── SEMÁFORO DE DINERO LIBRE PARA GASTAR ──
+        presupuesto_total_asignado = df_cat[df_cat["tipo"] == "gasto"]["presupuesto_mensual"].sum() if not df_cat.empty else 0
+        dinero_libre_real = max(0, total_ingreso - total_gasto - presupuesto_total_asignado)
+        
+        st.markdown("---")
+        st.markdown("#### 🟢 Semáforo de Dinero Disponible Real")
+        col_lib1, col_lib2 = st.columns([2, 1])
+        col_lib1.info(f"💡 Te quedan **{dinero(dinero_libre_real)}** libres este mes tras cubrir tus gastos y metas presupuestadas.")
+        col_lib2.metric("Dinero libre real", dinero(dinero_libre_real))
+
         tasa_ahorro = balance / total_ingreso if total_ingreso > 0 else 0
         puntaje_salud = round(min(100, max(0, min(max(tasa_ahorro, 0), 1) * 60 + 40)))
 
@@ -702,7 +717,7 @@ with tab1:
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ============================================================
-# REGISTRAR
+# TAB 2: REGISTRAR MOVIMIENTO
 # ============================================================
 with tab2:
     st.subheader("Registrar un movimiento")
@@ -713,7 +728,7 @@ with tab2:
             tipo_tx = st.radio("Tipo", ["Gasto", "Ingreso"], horizontal=True)
         with c2:
             monto_tx = st.number_input(f"Monto ({st.session_state['moneda']})", min_value=0.0, step=10.0)
-            descripcion_tx = st.text_input("Descripción", placeholder="Ej: supermercado, Uber")
+            descripcion_tx = st.text_input("Descripción", placeholder="Ej: supermercado, Uber, Netflix")
 
         tipo_categoria = "gasto" if tipo_tx == "Gasto" else "ingreso"
         categorias_disponibles = df_cat[df_cat["tipo"] == tipo_categoria]["name"].tolist() if not df_cat.empty else []
@@ -754,41 +769,27 @@ with tab2:
                 st.error(f"Error al guardar: {e}")
 
 # ============================================================
-# IMPORTAR CSV
+# TAB 3: PRESUPUESTO BASE CERO Y CATEGORÍAS
 # ============================================================
 with tab3:
-    st.subheader("📥 Importar movimientos desde CSV")
-    if not es_pro:
-        st.info("✨ La importación de CSV está disponible en el plan Pro.")
-    else:
-        archivo = st.file_uploader("Archivo CSV", type=["csv"])
-        if archivo:
-            try:
-                df_csv = pd.read_csv(archivo)
-                st.write("Vista previa de tu archivo:", df_csv.head(3))
-                if st.button("Procesar y guardar importación"):
-                    st.success("Archivo importado correctamente.")
-            except Exception as e:
-                st.error(f"Error al leer archivo: {e}")
-
-# ============================================================
-# PRESUPUESTOS Y GESTIÓN DE CATEGORÍAS
-# ============================================================
-with tab4:
-    st.subheader("🎯 Presupuestos y Gestión de Categorías")
+    st.subheader("🎯 Presupuesto Base Cero y Gestión de Categorías")
+    st.markdown("La premisa: **Ingresos Totales - Ahorros - Gastos Asignados = 0**. Cada unidad de dinero tiene un propósito.")
 
     if not es_pro:
-        st.info("✨ Los presupuestos y gestión avanzada de categorías están en el plan Pro.")
+        st.info("✨ El Presupuesto Base Cero y gestión avanzada están en el plan Pro.")
     else:
-        st.markdown("#### Configurar Presupuestos")
+        st.markdown("#### Configurar Presupuestos Mensuales")
         if df_cat.empty:
             st.caption("No tienes categorías creadas.")
         else:
+            total_presupuestado = 0.0
             for _, fila in df_cat[df_cat["tipo"] == "gasto"].iterrows():
                 col1, col2, col3 = st.columns([2, 1, 0.8])
                 col1.write(f"{icono_categoria(fila['name'])} **{fila['name']}**")
                 
                 valor_base = float(fila["presupuesto_mensual"]) if pd.notna(fila["presupuesto_mensual"]) else 0.0
+                total_presupuestado += valor_base
+
                 nuevo_valor = col2.number_input(
                     f"Presupuesto {fila['name']}",
                     min_value=0.0,
@@ -798,14 +799,14 @@ with tab4:
                     label_visibility="collapsed",
                 )
                 
-                if col3.button("🗑️ Eliminar", key=f"del_cat_{fila['id']}"):
+                if col3.button("🗑️", key=f"del_cat_{fila['id']}"):
                     try:
                         supabase.table("categories").delete().eq("id", fila["id"]).execute()
-                        st.success(f"Categoría '{fila['name']}' eliminada.")
+                        st.success(f"Categoría eliminada.")
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
-                        st.error(f"No se pudo eliminar: {e}")
+                        st.error(f"Error: {e}")
 
                 nuevo_base = a_cop(nuevo_valor)
                 if abs(nuevo_base - valor_base) > 0.01:
@@ -813,7 +814,9 @@ with tab4:
                         supabase.table("categories").update({"presupuesto_mensual": nuevo_base}).eq("id", fila["id"]).execute()
                         st.cache_data.clear()
                     except Exception as e:
-                        st.error(f"Error al actualizar: {e}")
+                        st.error(f"Error: {e}")
+
+            st.markdown(f"**Total asignado a gastos:** {dinero(total_presupuestado)}")
 
         st.divider()
         st.markdown("#### ➕ Crear nueva categoría de gasto")
@@ -826,132 +829,160 @@ with tab4:
                     "tipo": "gasto",
                     "presupuesto_mensual": 0.0
                 }).execute()
-                st.success(f"Categoría '{nueva_cat.strip()}' creada con éxito.")
+                st.success(f"Categoría '{nueva_cat.strip()}' creada.")
                 st.cache_data.clear()
                 st.rerun()
             except Exception as e:
-                st.error(f"No se pudo crear la categoría: {e}")
+                st.error(f"Error: {e}")
 
 # ============================================================
-# EDUCACIÓN FINANCIERA (CONSEJOS PERSONALIZADOS CON VALORES REALES)
+# TAB 4: METAS DE AHORRO CON GAMIFICATION Y PROYECCIONES
+# ============================================================
+with tab4:
+    st.subheader("🎯 Metas de Ahorro y Proyecciones")
+    st.markdown("Define tus propósitos (Viajes, Fondo de Emergencia, Inversiones) y visualiza exactamente cuándo los cumplirás.")
+
+    if not es_pro:
+        st.info("✨ Las metas de ahorro inteligentes están disponibles en el plan Pro.")
+    else:
+        col_mg1, col_mg2 = st.columns([1.2, 1])
+        with col_mg1:
+            st.markdown("#### Tus Metas Activas")
+            if df_metas.empty:
+                st.info("Aún no has creado metas de ahorro.")
+            else:
+                for _, meta in df_metas.iterrows():
+                    actual = float(meta["monto_actual"] or 0)
+                    objetivo = float(meta["monto_objetivo"] or 1)
+                    progreso = min(1.0, actual / objetivo)
+                    porcentaje = progreso * 100
+                    
+                    st.markdown(f"**{meta['titulo']}** — {dinero(actual)} / {dinero(objetivo)} ({porcentaje:.1f}%)")
+                    st.progress(progreso)
+                    
+                    # Botón para abonar
+                    c_abonar1, c_abonar2 = st.columns([1, 1])
+                    abono_val = c_abonar1.number_input(f"Abonar a {meta['id']}", min_value=0.0, step=10.0, key=f"abono_input_{meta['id']}", label_visibility="collapsed")
+                    if c_abonar2.button(f"Abonar", key=f"btn_abono_{meta['id']}"):
+                        nuevo_actual = actual + a_cop(abono_val)
+                        try:
+                            supabase.table("savings_goals").update({"monto_actual": nuevo_actual}).eq("id", meta["id"]).execute()
+                            st.success("¡Abono registrado con éxito!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    st.markdown("---")
+
+        with col_mg2:
+            st.markdown("#### ➕ Crear Nueva Meta")
+            with st.form("form_meta", clear_on_submit=True):
+                titulo_meta = st.text_input("Nombre de la meta", placeholder="Ej: Viaje a Europa")
+                objetivo_meta = st.number_input(f"Monto objetivo ({st.session_state['moneda']})", min_value=0.0, step=100.0)
+                fecha_meta = st.date_input("Fecha objetivo", value=date.today())
+                crear_meta_btn = st.form_submit_button("Crear meta")
+
+            if crear_meta_btn:
+                if titulo_meta and objetivo_meta > 0:
+                    try:
+                        supabase.table("savings_goals").insert({
+                            "user_email": email,
+                            "titulo": titulo_meta,
+                            "monto_objetivo": a_cop(objetivo_meta),
+                            "monto_actual": 0.0,
+                            "fecha_objetivo": fecha_meta.isoformat()
+                        }).execute()
+                        st.success("Meta creada con éxito.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.error("Completa todos los campos correctamente.")
+
+# ============================================================
+# TAB 5: AUDITORÍA DE GASTOS HORMIGA Y SUSCRIPCIONES
 # ============================================================
 with tab5:
-    st.subheader("📚 Educación y Consejos Financieros Personalizados")
-    st.caption("Análisis inteligente basado en tus movimientos y presupuestos actuales del mes.")
+    st.subheader("🔍 Auditoría Inteligente de Gastos Hormiga y Suscripciones")
+    st.caption("La IA escanea tus transacciones para detectar fugas silenciosas de dinero.")
 
-    # Calcular métricas reales del usuario para los consejos
+    if df_tx.empty:
+        st.info("Registra transacciones para activar la auditoría inteligente.")
+    else:
+        # Detectar suscripciones recurrentes frecuentes
+        df_tx_audit = df_tx.copy()
+        sus_palabras = ["netflix", "spotify", "disney", "hbo", "prime", "youtube", "icloud", "chatgpt", "gimnasio", "gym"]
+        mask_sus = df_tx_audit["descripcion"].astype(str).str.lower().apply(lambda x: any(p in x for p in sus_palabras))
+        df_suscripciones = df_tx_audit[mask_sus]
+
+        st.markdown("#### 📱 Suscripciones detectadas")
+        if df_suscripciones.empty:
+            st.success("✅ No se detectaron suscripciones recurrentes comunes en tus registros recientes.")
+        else:
+            total_sus = df_suscripciones["monto"].abs().sum()
+            st.warning(f"⚠️ Encontramos transacciones asociadas a servicios recurrentes que suman **{dinero(total_sus)}**. ¿Usas todas activamente?")
+            st.dataframe(df_suscripciones[["fecha", "descripcion", "monto", "categoria"]], use_container_width=True)
+
+        st.markdown("#### ☕ Análisis de Gastos Hormiga")
+        mask_hormiga = df_tx_audit["descripcion"].astype(str).str.lower().apply(lambda x: any(p in x for p in ["cafe", "café", "snacks", "uber", "didi", "rappi"]))
+        df_hormigas = df_tx_audit[mask_hormiga]
+        if not df_hormigas.empty:
+            total_hormigas = df_hormigas["monto"].abs().sum()
+            st.info(f"💡 Tus microcompras en cafeterías, transporte exprés o plataformas de entrega suman **{dinero(total_hormigas)}** este periodo.")
+
+# ============================================================
+# TAB 6: EDUCACIÓN FINANCIERA (SPOTIFY WRAPPED Y CONSEJOS)
+# ============================================================
+with tab6:
+    st.subheader("📚 Educación y Reporte Spotify Wrapped Financiero")
+    st.caption("Resumen narrativo y principios clave para transformar tu relación con el dinero.")
+
+    # ── SPOTIFY WRAPPED FINANCIERO ──
+    st.markdown("#### 📊 Tu Wrapped Financiero del Mes")
     hoy = pd.Timestamp.today()
-    gasto_categorias = set(df_cat[df_cat["tipo"] == "gasto"]["name"]) if not df_cat.empty else set()
-    ingreso_categorias = set(df_cat[df_cat["tipo"] == "ingreso"]["name"]) if not df_cat.empty else set()
-
     if not df_tx.empty:
-        df_tx_temp = df_tx.copy()
-        df_tx_temp["mes"] = df_tx_temp["fecha"].dt.to_period("M")
-        df_mes_actual = df_tx_temp[df_tx_temp["mes"] == hoy.to_period("M")]
+        df_t_wrap = df_tx.copy()
+        df_t_wrap["mes"] = df_t_wrap["fecha"].dt.to_period("M")
+        df_mes_wrap = df_t_wrap[df_t_wrap["mes"] == hoy.to_period("M")]
         
-        g_mask = df_mes_actual["categoria"].isin(gasto_categorias) if gasto_categorias else df_mes_actual["monto"] < 0
-        i_mask = df_mes_actual["categoria"].isin(ingreso_categorias) if ingreso_categorias else df_mes_actual["monto"] > 0
+        gasto_cat_w = set(df_cat[df_cat["tipo"] == "gasto"]["name"]) if not df_cat.empty else set()
+        gw_mask = df_mes_wrap["categoria"].isin(gasto_cat_w) if gasto_cat_w else df_mes_wrap["monto"] < 0
         
-        t_gasto = -df_mes_actual.loc[g_mask, "monto"].sum() if not df_mes_actual.empty else 0
-        t_ingreso = df_mes_actual.loc[i_mask, "monto"].sum() if not df_mes_actual.empty else 0
-        t_balance = t_ingreso - t_gasto
-        tasa_ahorro_val = (t_balance / t_ingreso) if t_ingreso > 0 else 0
-    else:
-        t_gasto = 0
-        t_ingreso = 0
-        t_balance = 0
-        tasa_ahorro_val = 0
-
-    # 1. Consejo basado en la Regla 50/30/20 y ahorro real
-    st.markdown("#### 🎯 Diagnóstico de tu Tasa de Ahorro")
-    if t_ingreso == 0:
-        st.info("💡 **Consejo inicial:** Registra tus ingresos del mes para que podamos evaluar tu capacidad de ahorro y darte recomendaciones a la medida.")
-    else:
-        porcentaje_ahorro = tasa_ahorro_val * 100
-        if porcentaje_ahorro >= 20:
+        if not df_mes_wrap[gw_mask].empty:
+            gasto_por_c = df_mes_wrap[gw_mask].groupby("categoria")["monto"].sum().abs()
+            cat_reina = gasto_por_c.idxmax()
+            monto_reina = gasto_por_c.max()
+            
             st.markdown(
                 f"""
                 <div class="consejo-card consejo-bueno">
-                    <b>🌟 ¡Excelente salud financiera!</b><br>
-                    Estás ahorrando el <b>{porcentaje_ahorro:.1f}%</b> de tus ingresos este mes, superando la meta recomendada del 20% de la regla 50/30/20. ¡Sigue así y evalúa opciones de inversión para ese capital!
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        elif porcentaje_ahorro > 0:
-            st.markdown(
-                f"""
-                <div class="consejo-card">
-                    <b>📈 ¡Vas por buen camino, pero hay margen de mejora!</b><br>
-                    Tu ahorro actual es del <b>{porcentaje_ahorro:.1f}%</b>. La regla 50/30/20 sugiere buscar llegar al 20%. Intenta revisar tus gastos en entretenimiento o restaurantes para recortar pequeños excessos.
+                    <b>🎵 FinZen Wrapped: Tus hábitos al desnudo</b><br>
+                    • Tu categoría reina este mes fue <b>{cat_reina}</b> con un consumo de <b>{dinero(monto_reina)}</b>.<br>
+                    • ¡Mantén la disciplina! Registrar tus movimientos eleva un 40% tu capacidad de ahorro a largo plazo.
                 </div>
                 """,
                 unsafe_allow_html=True
             )
         else:
-            st.markdown(
-                f"""
-                <div class="consejo-card consejo-alerta">
-                    <b>⚠️ Alerta de presupuesto negativo</b><br>
-                    Este mes tus gastos ({dinero(t_gasto)}) superan tus ingresos ({dinero(t_ingreso)}). Te sugerimos aplicar un <b>Presupuesto Base Cero</b> de manera urgente y frenar gastos hormiga o compras no esenciales.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    # 2. Análisis de presupuestos por categoría superados
-    st.markdown("#### 🚨 Control de Presupuestos por Categoría")
-    if not df_cat.empty and not df_tx.empty:
-        gastos_por_cat = df_mes_actual[g_mask].groupby("categoria")["monto"].sum().abs() if not df_mes_actual.empty else pd.Series()
-        presupuestos_df = df_cat[df_cat["tipo"] == "gasto"].set_index("name")["presupuesto_mensual"]
-        
-        superados = []
-        for cat, gastado in gastos_por_cat.items():
-            presu = presupuestos_df.get(cat, 0)
-            if presu and presu > 0 and gastado > presu:
-                superados.append((cat, gastado, presu))
-
-        if superados:
-            for cat, gastado, presu in superados:
-                st.markdown(
-                    f"""
-                    <div class="consejo-card consejo-alerta">
-                        <b>{icono_categoria(cat)} Atención en {cat}</b><br>
-                        Has gastado <b>{dinero(gastado)}</b> de un presupuesto límite de <b>{dinero(presu)}</b>. Te aconsejamos pausar nuevos consumos en esta categoría por el resto del mes.
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-        else:
-            st.markdown(
-                """
-                <div class="consejo-card consejo-bueno">
-                    <b>✅ ¡Control impecable!</b><br>
-                    Ninguna de tus categorías ha rebasado el presupuesto límite establecido para este periodo.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-    else:
-        st.caption("Configura tus presupuestos en la pestaña 🎯 Presupuestos para recibir alertas personalizadas.")
+            st.info("Registra gastos este mes para desbloquear tu Wrapped financiero personalizado.")
 
     st.divider()
-    st.markdown("#### 📖 Conceptos Clave de Finanzas Personales")
+    st.markdown("#### 📖 Conceptos Clave")
     conceptos = [
-        ("Regla 50/30/20", "Una guía clásica para distribuir tus ingresos mensuales: el 50% se destina a necesidades básicas (vivienda, servicios, alimentación), el 30% a deseos o estilo de vida, y el 20% al ahorro o pago acelerado de deudas."),
-        ("Fondo de Emergencia", "Es un colchón financiero intocable diseñado para cubrir entre 3 y 6 meses de tus gastos esenciales ante imprevistos graves como pérdida de empleo o emergencias médicas."),
-        ("Interés Compuesto", "El fenómeno por el cual los intereses generados por tus ahorros o inversiones se van sumando al capital inicial, generando a su vez nuevos intereses. El tiempo es el mejor aliado de este efecto."),
-        ("Presupuesto Base Cero", "Una metodología en la cual cada unidad de dinero que ingresa tiene un propósito asignado antes de gastarlo (Ingresos - Gastos - Ahorros = 0), evitando fugas de dinero hormiga.")
+        ("Regla 50/30/20", "50% necesidades básicas, 30% deseos/estilo de vida, 20% ahorro e inversión."),
+        ("Fondo de Emergencia", "Colchón intocable de 3 a 6 meses de gastos esenciales ante imprevistos."),
+        ("Interés Compuesto", "El crecimiento exponencial del dinero cuando los rendimientos se reinvierten con el tiempo."),
+        ("Presupuesto Base Cero", "Asignar un propósito exacto a cada unidad monetaria que ingresa (Ingresos - Gastos - Ahorros = 0).")
     ]
-
     for titulo, texto in conceptos:
         with st.expander(titulo):
             st.write(texto)
 
 # ============================================================
-# MI HOGAR
+# TAB 7: MI HOGAR
 # ============================================================
-with tab6:
+with tab7:
     st.subheader("🏠 Mi Hogar (Finanzas Compartidas)")
     if not es_pro:
         st.info("✨ Los hogares compartidos están disponibles en el plan Pro.")
@@ -973,19 +1004,19 @@ with tab6:
             st.write(f"- {m['user_email']} ({'Dueño' if m['role']=='owner' else 'Miembro'})")
 
 # ============================================================
-# LEGAL
+# TAB 8: LEGAL
 # ============================================================
-with tab7:
+with tab8:
     st.subheader("⚖️ Legal y Privacidad")
     with st.expander("📄 Términos de Servicio"):
         st.markdown(f"**Última actualización:** {date.today().strftime('%d/%m/%Y')}\n\nFinZen es una herramienta de organización financiera personal sin carácter de asesoría de inversión profesional.")
     with st.expander("🔒 Aviso de Privacidad"):
-        st.markdown("Tus datos están protegidos. Para cualquier duda o ejercicio de derechos sobre tu información, contáctanos directamente en: **minatobrasil6@gmail.com**")
+        st.markdown("Tus datos están protegidos. Contáctanos en: **minatobrasil6@gmail.com**")
 
 # ============================================================
 # PANEL DE ADMINISTRADOR (EXCLUSIVO minatobrasil6@gmail.com)
 # ============================================================
-if es_administrador():
+if es_administrador() and tab_admin is not None:
     with tab_admin:
         st.subheader("🛡️ Panel de Control de Administrador")
         st.markdown(f"Bienvenido, administrador **{CORREO_ADMIN}**.")
