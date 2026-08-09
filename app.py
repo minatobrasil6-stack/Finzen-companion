@@ -217,7 +217,7 @@ section[data-testid="stSidebar"] {{
 # ============================================================
 # CONFIGURACIÓN Y CONSTANTES
 # ============================================================
-STRIPE_PAYMENT_LINK = "https://buy.stripe.com/tu-link-de-pago"
+STRIPE_PAYMENT_LINK = "https://checkout.wompi.co/l/VPOS_nhu0oQ"
 
 CATEGORIAS_DEFECTO = [
     ("Supermercado", "gasto"),
