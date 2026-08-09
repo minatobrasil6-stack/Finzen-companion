@@ -1,27 +1,17 @@
 {
-  "name": "FinZen",
   "short_name": "FinZen",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#FAF7F1",
-  "theme_color": "#1F4D3D",
-  "lang": "es",
-  "dir": "ltr",
-  "orientation": "portrait",
-  "description": "Tu herramienta financiera definitiva para control de gastos, presupuestos y metas.",
-  "categories": ["finance", "productivity"],
+  "name": "FinZen",
   "icons": [
     {
-      "src": "https://raw.githubusercontent.com/icons8/windows-10-icons/master/PNG/96/Plants/plant_under_sun_96.png",
-      "sizes": "96x96",
+      "src": "favicon_512.png",
       "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "https://raw.githubusercontent.com/icons8/windows-10-icons/master/PNG/512/Plants/plant_under_sun_512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "sizes": "512x512"
     }
-  ]
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#1f4d3d",
+  "background_color": "hsv(345, 22%, 91%)",
+  "id": "com.finzen.app",
+  "description": "Tu herramienta financiera definitiva."
 }
