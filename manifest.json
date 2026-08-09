@@ -1,6 +1,6 @@
 {
-  "short_name": "FinZen",
-  "name": "FinZen",
+  "short_name": "Streamlit",
+  "name": "Streamlit",
   "icons": [
     {
       "src": "favicon_512.png",
@@ -10,8 +10,6 @@
   ],
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#1f4d3d",
-  "background_color": "hsv(345, 22%, 91%)",
-  "id": "com.finzen.app",
-  "description": "Tu herramienta financiera definitiva."
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff"
 }
