@@ -13,6 +13,17 @@ from datetime import date
 # Metas Gamificadas, Auditoría de Gastos Hormiga y Spotify Wrapped Financiero.
 # Correo administrador: minatobrasil6@gmail.com
 # ============================================================
+import streamlit.components.v1 as components
+
+# Inyectar el manifest.json para convertir la app en PWA instalable
+components.html(
+    """
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#1F4D3D">
+    """,
+    height=0,
+)
+
 
 try:
     from supabase import create_client
