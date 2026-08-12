@@ -4,3 +4,4 @@ numpy
 plotly
 supabase>=2.4.0
 requests
+extra-streamlit-components>=0.1.60
