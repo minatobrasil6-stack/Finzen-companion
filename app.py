@@ -380,6 +380,83 @@ def auto_categorizar(descripcion):
 
 
 # ============================================================
+# CONTEXTO ECONÓMICO — 3 modelos públicos, académicamente validados, mismos
+# que usa el motor Q-FSI. Nudge educativo, NO consejo de inversión. Se muestran
+# por separado porque cada uno mide algo distinto (bonos, empleo, actividad
+# real) y combinarlos en un solo número fingiría una precisión que no existe.
+# ============================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def cargar_fred_csv(series_id, years=None):
+    try:
+        r = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}", timeout=10)
+        if r.status_code != 200:
+            return None
+        df = pd.read_csv(io.StringIO(r.text))
+        df.columns = ["Date", series_id]
+        df["Date"] = pd.to_datetime(df["Date"])
+        df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
+        df = df.dropna().set_index("Date")
+        if years:
+            df = df[df.index >= pd.Timestamp.today() - pd.DateOffset(years=years)]
+        return df if not df.empty else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cargar_contexto_economico():
+    """Evalúa los 3 modelos y devuelve (señales_activas, detalle). Fuente: FRED,
+    dato público de gobierno de EE.UU. — sin restricción de licencia."""
+    señales, detalle = 0, []
+
+    dgs10 = cargar_fred_csv("DGS10", years=1)
+    dgs3mo = cargar_fred_csv("DGS3MO", years=1)
+    if dgs10 is not None and dgs3mo is not None:
+        df = dgs10.join(dgs3mo, how="inner").dropna()
+        if not df.empty:
+            spread = df["DGS10"].iloc[-1] - df["DGS3MO"].iloc[-1]
+            prob = (0.5 * (1 + math.erf((-0.5333 - 0.6330 * spread) / math.sqrt(2)))) * 100
+            activo = prob >= 30
+            señales += int(activo)
+            detalle.append(("Modelo NY Fed (curva de rendimientos)", prob, activo,
+                             f"{prob:.0f}% prob. de recesión en 12 meses — LÍDER, con rezago de 6-24 meses"))
+
+    sahm = cargar_fred_csv("SAHMREALTIME", years=2)
+    if sahm is not None and not sahm.empty:
+        valor = sahm["SAHMREALTIME"].iloc[-1]
+        activo = valor >= 0.50
+        señales += int(activo)
+        detalle.append(("Regla de Sahm (empleo)", valor, activo,
+                         f"{valor:.2f}pp sobre el mínimo de 12 meses — CASI COINCIDENTE, confirma no anticipa"))
+
+    recprob = cargar_fred_csv("RECPROUSM156N", years=2)
+    if recprob is not None and not recprob.empty:
+        valor = recprob["RECPROUSM156N"].iloc[-1]
+        activo = valor >= 50
+        señales += int(activo)
+        detalle.append(("Modelo Chauvet-Piger (actividad real)", valor, activo,
+                         f"{valor:.0f}% probabilidad — COINCIDENTE, sin usar precios de mercado"))
+
+    return señales, detalle
+
+
+def recomendacion_fondo_emergencia(señales, gasto_mensual_promedio, ahorro_actual_estimado):
+    """Conecta el contexto macro con los datos REALES del usuario — esto es lo
+    que ningún competidor (Monarch, YNAB, Copilot) hace: traduce una señal
+    macroeconómica pública en un número concreto y accionable para TU bolsillo."""
+    if gasto_mensual_promedio <= 0:
+        return None
+    meses_cubiertos = (ahorro_actual_estimado / gasto_mensual_promedio) if gasto_mensual_promedio > 0 else 0
+    meses_recomendados = 6 if señales >= 2 else (4 if señales == 1 else 3)
+    faltante = max(0, (meses_recomendados * gasto_mensual_promedio) - ahorro_actual_estimado)
+    return {
+        "meses_cubiertos": meses_cubiertos,
+        "meses_recomendados": meses_recomendados,
+        "faltante": faltante,
+    }
+
+
+# ============================================================
 # DETECTOR ALGORÍTMICO DE GASTOS RECURRENTES / SUSCRIPCIONES
 # A diferencia de una lista fija de nombres de apps (Netflix, Spotify...), esto
 # encuentra CUALQUIER cargo recurrente en TUS datos reales: agrupa por
@@ -849,14 +926,14 @@ hogar = obtener_hogar(email) if supabase else None
 # TABS PRINCIPALES (Con Admin condicional)
 # ============================================================
 tabs_nombres = [
-    "📊 Resumen", "➕ Registrar", "🏦 Conectar Banco", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
+    "📊 Resumen", "➕ Registrar", "🏦 Conectar Banco", "🌍 Contexto Económico", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
 ]
 if es_administrador():
     tabs_nombres.append("🛡️ Admin")
 
 tabs = st.tabs(tabs_nombres)
-tab1, tab2, tab_banco, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:9]
-tab_admin = tabs[9] if es_administrador() else None
+tab1, tab2, tab_banco, tab_macro, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:10]
+tab_admin = tabs[10] if es_administrador() else None
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
@@ -1059,6 +1136,56 @@ with tab_banco:
                 height=520,
             )
             st.caption("Se abre el widget oficial de Belvo. En sandbox, usa cualquier banco de la lista con credenciales de prueba (Belvo las muestra en pantalla).")
+
+with tab_macro:
+    st.subheader("🌍 Contexto Económico")
+    st.info("A diferencia de tu presupuesto (que mide TU dinero), esto mide el contexto de la economía real usando 3 modelos públicos, académicamente validados. Es información educativa — **no es asesoría de inversión ni una predicción garantizada**. Ningún competidor de presupuesto personal (Monarch, YNAB, Copilot, Rocket Money) ofrece esto.")
+
+    señales, detalle_señales = cargar_contexto_economico()
+
+    if not detalle_señales:
+        st.warning("No se pudo obtener el contexto económico en este momento (falla temporal al conectar con FRED). Intenta de nuevo más tarde.")
+    else:
+        st.metric("Señales de recesión activas ahora mismo", f"{señales} / {len(detalle_señales)}")
+        st.caption("Solo es un conteo de cuántos modelos están en zona de alerta — no es una probabilidad combinada ni un índice nuevo. Cada modelo mide algo distinto (bonos, empleo, actividad real) y tiene su propio historial de aciertos y fallos.")
+
+        cols_macro = st.columns(len(detalle_señales))
+        for col, (nombre, valor, activo, texto) in zip(cols_macro, detalle_señales):
+            col.markdown(f"**{'🔴' if activo else '🟢'} {nombre}**")
+            col.caption(texto)
+
+        st.warning("⚠️ Ningún modelo de recesión es infalible. El NY Fed puede anticipar con años de rezago variable; la Sahm confirma después de que la recesión ya empezó; el coincidente se revisa con el tiempo. Esto no reemplaza el consejo de un asesor financiero certificado.")
+
+        st.divider()
+        st.markdown("### 💰 Qué significa esto para TU fondo de emergencia")
+        st.caption("Esta es la parte que ningún competidor hace: conectar la señal macro con tu situación real, no solo mostrarte un número abstracto.")
+
+        if df_tx.empty:
+            st.caption("Registra al menos un mes de movimientos para calcular tu gasto mensual promedio.")
+        else:
+            df_tx_macro = df_tx.copy()
+            df_tx_macro["mes"] = df_tx_macro["fecha"].dt.to_period("M")
+            gasto_cat_macro = set(df_cat[df_cat["tipo"] == "gasto"]["name"]) if not df_cat.empty else set()
+            gm_mask = df_tx_macro["categoria"].isin(gasto_cat_macro) if gasto_cat_macro else df_tx_macro["monto"] < 0
+            gasto_por_mes = df_tx_macro[gm_mask].groupby("mes")["monto"].sum().abs()
+            gasto_mensual_promedio = gasto_por_mes.mean() if not gasto_por_mes.empty else 0
+
+            col_ahorro1, col_ahorro2 = st.columns([1, 1.3])
+            with col_ahorro1:
+                ahorro_actual = st.number_input(f"¿Cuánto tienes hoy en tu fondo de emergencia? ({st.session_state['moneda']})", min_value=0.0, step=100.0, key="fondo_emergencia_input")
+            ahorro_actual_cop = a_cop(ahorro_actual)
+
+            resultado = recomendacion_fondo_emergencia(señales, gasto_mensual_promedio, ahorro_actual_cop)
+            with col_ahorro2:
+                if resultado and gasto_mensual_promedio > 0:
+                    st.metric("Meses de gastos que cubres hoy", f"{resultado['meses_cubiertos']:.1f}")
+                    if resultado["faltante"] > 0:
+                        st.markdown(f"Con **{señales} de {len(detalle_señales)}** señales activas, la referencia recomendada ahora es de **{resultado['meses_recomendados']} meses** de gastos guardados. Te faltarían aproximadamente {dinero_md(resultado['faltante'])} para llegar a eso.")
+                    else:
+                        st.success(f"Ya cubres los {resultado['meses_recomendados']} meses de referencia para el contexto actual. 🎉")
+                else:
+                    st.caption("Ingresa tu ahorro actual y registra gastos para ver el cálculo.")
+            st.caption("La cifra de 'meses recomendados' es una referencia educativa común (3-6 meses de gastos), ajustada levemente según cuántas señales macro estén activas — no es una fórmula validada científicamente, es un punto de partida razonable para pensar el tema.")
 
 with tab3:
     st.subheader("🎯 Presupuesto Base Cero y Gestión de Categorías")
