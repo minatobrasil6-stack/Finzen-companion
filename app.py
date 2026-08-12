@@ -5,7 +5,13 @@ import plotly.graph_objects as go
 import io
 import math
 import requests
-from datetime import date
+from datetime import date, datetime, timedelta
+
+try:
+    import extra_streamlit_components as stx
+    COOKIES_AVAILABLE = True
+except ImportError:
+    COOKIES_AVAILABLE = False
 
 # ============================================================
 # FINZEN — app.py
@@ -372,6 +378,46 @@ def auto_categorizar(descripcion):
             return categoria
     return "Otros gastos"
 
+
+# ============================================================
+# DETECTOR ALGORÍTMICO DE GASTOS RECURRENTES / SUSCRIPCIONES
+# A diferencia de una lista fija de nombres de apps (Netflix, Spotify...), esto
+# encuentra CUALQUIER cargo recurrente en TUS datos reales: agrupa por
+# descripción normalizada, exige que aparezca en al menos 2 meses distintos con
+# montos similares (±15%), y estima si es mensual consecutivo o irregular.
+# Detecta suscripciones que no están en ninguna lista predefinida.
+# ============================================================
+def detectar_recurrentes(df_tx, gasto_categorias):
+    if df_tx.empty:
+        return []
+    df = df_tx[df_tx["categoria"].isin(gasto_categorias)].copy() if gasto_categorias else df_tx[df_tx["monto"] < 0].copy()
+    if df.empty:
+        return []
+    df["desc_norm"] = df["descripcion"].fillna("").astype(str).str.lower().str.strip()
+    df = df[df["desc_norm"] != ""]
+    df["mes"] = df["fecha"].dt.to_period("M")
+    df["monto_abs"] = df["monto"].abs()
+
+    resultados = []
+    for desc, grupo in df.groupby("desc_norm"):
+        meses_unicos = grupo["mes"].nunique()
+        if meses_unicos < 2:
+            continue
+        monto_prom = grupo["monto_abs"].mean()
+        monto_std = grupo["monto_abs"].std() or 0
+        if monto_prom > 0 and (monto_std / monto_prom) > 0.15:
+            continue  # montos muy variables: no parece un cargo fijo recurrente
+        meses_ordenados = sorted(grupo["mes"].unique())
+        consecutivo = all((meses_ordenados[i + 1] - meses_ordenados[i]).n == 1 for i in range(len(meses_ordenados) - 1))
+        resultados.append({
+            "descripcion": grupo["descripcion"].iloc[-1],
+            "categoria": grupo["categoria"].iloc[-1] if "categoria" in grupo.columns else "Otros gastos",
+            "monto_promedio": monto_prom,
+            "meses_detectados": meses_unicos,
+            "consecutivo": consecutivo,
+        })
+    return sorted(resultados, key=lambda r: r["monto_promedio"], reverse=True)
+
 # ============================================================
 # SUPABASE Y GESTIÓN DE USUARIOS
 # ============================================================
@@ -392,9 +438,67 @@ for key, default in [
     ("plan", "free"),
     ("nombre_usuario", ""),
     ("foto_perfil", ""),
+    ("intento_restaurar_sesion", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+# ============================================================
+# SESIÓN PERSISTENTE — sin esto, st.session_state se borra cada vez que se
+# recarga la página (F5), obligando a iniciar sesión de nuevo aunque el login
+# siga siendo válido. La cookie guarda el "refresh token" de Supabase (NUNCA la
+# contraseña); al recargar, se usa ese token para restaurar la sesión sola.
+# ============================================================
+NOMBRE_COOKIE_SESION = "finzen_refresh_token"
+
+
+def get_cookie_manager():
+    """Sin @st.cache_resource a propósito: CookieManager crea un widget/componente
+    internamente, y Streamlit no permite widgets dentro de funciones cacheadas
+    (dispara CachedWidgetWarning y falla). Es liviano, no necesita cachearse."""
+    return stx.CookieManager(key="finzen_cookie_manager") if COOKIES_AVAILABLE else None
+
+
+cookie_manager = get_cookie_manager()
+
+
+def guardar_sesion_en_cookie(session):
+    if cookie_manager and session and getattr(session, "refresh_token", None):
+        cookie_manager.set(NOMBRE_COOKIE_SESION, session.refresh_token,
+                            expires_at=datetime.now() + timedelta(days=30), key="set_cookie_login")
+
+
+def borrar_cookie_sesion():
+    if cookie_manager:
+        try:
+            cookie_manager.delete(NOMBRE_COOKIE_SESION, key="del_cookie_login")
+        except Exception:
+            pass
+
+
+def restaurar_sesion_desde_cookie():
+    """Se ejecuta una sola vez por sesión de navegador. Si hay una cookie con un
+    refresh token válido, reconstruye la sesión de Supabase sin pedir contraseña."""
+    if not (supabase and cookie_manager) or st.session_state["user"] or st.session_state["intento_restaurar_sesion"]:
+        return
+    st.session_state["intento_restaurar_sesion"] = True
+    refresh_token = cookie_manager.get(NOMBRE_COOKIE_SESION)
+    if not refresh_token:
+        return
+    try:
+        res = supabase.auth.refresh_session(refresh_token)
+        if res and res.user:
+            st.session_state["user"] = res.user.email
+            st.session_state["plan"] = get_user_plan(res.user.email)
+            if not st.session_state["nombre_usuario"]:
+                st.session_state["nombre_usuario"] = res.user.email.split("@")[0].capitalize()
+            asegurar_categorias_defecto(res.user.email)
+            guardar_sesion_en_cookie(res.session)  # Supabase rota el refresh token: guardar el nuevo
+            st.rerun()
+    except Exception:
+        borrar_cookie_sesion()
+
 
 def get_user_plan(email):
     if not supabase:
@@ -572,6 +676,8 @@ def cargar_metas(email):
 # ============================================================
 # SIDEBAR — AUTENTICACIÓN Y PERFIL DE USUARIO
 # ============================================================
+restaurar_sesion_desde_cookie()
+
 st.sidebar.markdown("### 🌱 FinZen")
 
 if tc_usd_cop:
@@ -608,8 +714,10 @@ elif not st.session_state["user"]:
                     try:
                         res = supabase.auth.sign_in_with_password({"email": correo, "password": clave})
                         user_obj = res.user if res else None
+                        session_obj = res.session if res else None
                     except Exception:
                         user_obj = None
+                        session_obj = None
 
                     if user_obj:
                         st.session_state["user"] = correo
@@ -617,6 +725,7 @@ elif not st.session_state["user"]:
                         if not st.session_state["nombre_usuario"]:
                             st.session_state["nombre_usuario"] = correo.split("@")[0].capitalize()
                         asegurar_categorias_defecto(correo)
+                        guardar_sesion_en_cookie(session_obj)
                         st.rerun()
                     else:
                         st.sidebar.error("Credenciales inválidas.")
@@ -695,8 +804,10 @@ text-decoration:none;font-weight:700;display:block;text-align:center;margin-top:
             supabase.auth.sign_out()
         except Exception:
             pass
+        borrar_cookie_sesion()
         st.session_state["user"] = None
         st.session_state["plan"] = "free"
+        st.session_state["intento_restaurar_sesion"] = False
         st.rerun()
 
 # ============================================================
@@ -1093,30 +1204,35 @@ with tab4:
 # ============================================================
 with tab5:
     st.subheader("🔍 Auditoría Inteligente de Gastos Hormiga y Suscripciones")
-    st.caption("Revisa tus transacciones para detectar fugas silenciosas de dinero por palabras clave.")
+    st.caption("Detecta patrones reales en tus propios movimientos — no una lista fija de apps famosas. Cualquier cargo que se repita en 2+ meses con monto parecido cuenta, aunque sea un servicio que nadie más conoce.")
 
     if df_tx.empty:
         st.info("Registra transacciones para activar la auditoría.")
     else:
-        df_tx_audit = df_tx.copy()
-        sus_palabras = ["netflix", "spotify", "disney", "hbo", "prime", "youtube", "icloud", "chatgpt", "gimnasio", "gym"]
-        mask_sus = df_tx_audit["descripcion"].astype(str).str.lower().apply(lambda x: any(p in x for p in sus_palabras))
-        df_suscripciones = df_tx_audit[mask_sus]
+        gasto_cat_audit = set(df_cat[df_cat["tipo"] == "gasto"]["name"]) if not df_cat.empty else set()
+        recurrentes = detectar_recurrentes(df_tx, gasto_cat_audit)
 
-        st.markdown("#### 📱 Suscripciones detectadas")
-        if df_suscripciones.empty:
-            st.success("✅ No se detectaron suscripciones recurrentes comunes en tus registros recientes.")
+        st.markdown("#### 📱 Cargos recurrentes detectados")
+        if not recurrentes:
+            st.success("✅ No se detectaron cargos recurrentes todavía (hace falta historial de al menos 2 meses por concepto).")
         else:
-            total_sus = df_suscripciones["monto"].abs().sum()
-            st.warning(f"⚠️ Encontramos transacciones asociadas a servicios recurrentes que suman **{dinero_md(total_sus)}**. ¿Usas todas activamente?")
-            st.dataframe(df_suscripciones[["fecha", "descripcion", "monto", "categoria"]], use_container_width=True)
+            total_recurrente = sum(r["monto_promedio"] for r in recurrentes)
+            st.warning(f"⚠️ Encontramos **{len(recurrentes)}** cargos recurrentes que suman ~**{dinero_md(total_recurrente)}**/mes. ¿Usas todos activamente?")
+            for r in recurrentes:
+                etiqueta = "mensual" if r["consecutivo"] else "irregular"
+                st.markdown(f"{icono_categoria(r['categoria'])} **{r['descripcion']}** — ~{dinero(r['monto_promedio'])}/mes · visto en {r['meses_detectados']} meses ({etiqueta})")
 
+        st.divider()
         st.markdown("#### ☕ Análisis de Gastos Hormiga")
+        st.caption("Complemento por palabras clave — microcompras que suelen pasar desapercibidas aunque no sean recurrentes en el mismo concepto exacto.")
+        df_tx_audit = df_tx.copy()
         mask_hormiga = df_tx_audit["descripcion"].astype(str).str.lower().apply(lambda x: any(p in x for p in ["cafe", "café", "snacks", "uber", "didi", "rappi"]))
         df_hormigas = df_tx_audit[mask_hormiga]
         if not df_hormigas.empty:
             total_hormigas = df_hormigas["monto"].abs().sum()
             st.info(f"💡 Tus microcompras en cafeterías, transporte exprés o plataformas de entrega suman **{dinero_md(total_hormigas)}** este periodo.")
+        else:
+            st.caption("Sin microcompras detectadas por palabra clave todavía.")
 
 # ============================================================
 # TAB 6: EDUCACIÓN FINANCIERA (SPOTIFY WRAPPED Y CONSEJOS)
