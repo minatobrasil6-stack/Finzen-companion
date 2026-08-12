@@ -13,17 +13,6 @@ from datetime import date
 # Metas Gamificadas, Auditoría de Gastos Hormiga y Spotify Wrapped Financiero.
 # Correo administrador: minatobrasil6@gmail.com
 # ============================================================
-import streamlit.components.v1 as components
-
-# Inyectar el manifest.json para convertir la app en PWA instalable
-components.html(
-    """
-    <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#1F4D3D">
-    """,
-    height=0,
-)
-
 
 try:
     from supabase import create_client
@@ -37,6 +26,34 @@ st.set_page_config(
     page_icon="🌱",
     initial_sidebar_state="expanded",
 )
+
+# Inyectar el manifest.json + service worker para convertir la app en PWA
+# instalable. Los archivos viven en ./static/ (manifest.json, icon-192.png,
+# icon-512.png, service-worker.js) y requieren enableStaticServing=true en
+# .streamlit/config.toml. Streamlit los sirve bajo la ruta /app/static/...
+import streamlit.components.v1 as components
+components.html(
+    """
+    <link rel="manifest" href="./app/static/manifest.json">
+    <link rel="icon" href="./app/static/icon-192.png">
+    <link rel="apple-touch-icon" href="./app/static/icon-192.png">
+    <meta name="theme-color" content="#1F4D3D">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="FinZen">
+    <script>
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./app/static/service-worker.js').catch(function(e) {
+            console.log('Service worker no registrado:', e);
+        });
+    }
+    </script>
+    """,
+    height=0,
+)
+# NOTA: la ruta exacta bajo la que Streamlit Cloud sirve /static puede variar
+# según versión — si "Instalar app" no aparece en el navegador tras desplegar,
+# lo primero a revisar es esta ruta (abre <tu-url>/app/static/manifest.json
+# directamente en el navegador; si da 404, hay que ajustar el prefijo).
 
 # ============================================================
 # CONFIGURACIÓN DE ADMINISTRADOR
@@ -291,10 +308,22 @@ def a_cop(valor, moneda=None):
     return valor
 
 def dinero(valor_cop, decimales=0):
+    """COP se muestra con punto como separador de miles (convención colombiana:
+    'COP $1.234.567', no 'COP $1,234,567'). USD mantiene coma (convención EE.UU.)."""
     valor = a_moneda(valor_cop)
     if st.session_state["moneda"] == "USD":
         return f"US$ {valor:,.{decimales}f}"
-    return f"COP ${valor:,.{decimales}f}"
+    texto = f"{valor:,.{decimales}f}".replace(",", ".")
+    return f"COP ${texto}"
+
+
+def dinero_md(valor_cop, decimales=0):
+    """Igual que dinero(), con el '$' escapado (\\$) para usar en st.markdown/
+    st.info/st.warning/st.success cuando pueda haber DOS montos en la misma línea.
+    Streamlit interpreta un par de '$' en una línea de Markdown como el inicio/fin
+    de una fórmula LaTeX — con dos montos en una frase, todo lo de en medio se
+    renderiza como código crudo en vez de texto normal (bug ya visto antes)."""
+    return dinero(valor_cop, decimales).replace("$", "\\$")
 
 def icono_categoria(nombre):
     return ICONOS_CATEGORIA.get(str(nombre), "🏷️")
@@ -368,8 +397,6 @@ for key, default in [
         st.session_state[key] = default
 
 def get_user_plan(email):
-    if email == CORREO_ADMIN:
-        return "pro"
     if not supabase:
         return "free"
     try:
@@ -424,6 +451,77 @@ def crear_hogar(email, nombre):
         return True, None
     except Exception as e:
         return False, str(e)
+
+# ============================================================
+# CONEXIÓN BANCARIA (Belvo) — todas las llamadas pasan por Edge Functions;
+# las credenciales secretas de Belvo NUNCA están en este archivo ni llegan
+# al navegador del usuario.
+# ============================================================
+def _url_funcion(nombre_funcion):
+    proyecto_url = st.secrets.get("SUPABASE_URL", "")
+    return f"{proyecto_url}/functions/v1/{nombre_funcion}"
+
+
+def _token_sesion_actual():
+    """Token de acceso de la sesión actual, necesario para que las Edge
+    Functions verifiquen quién eres de verdad (no lo que el cliente diga)."""
+    try:
+        sesion = supabase.auth.get_session()
+        return sesion.access_token if sesion else None
+    except Exception:
+        return None
+
+
+def obtener_conexiones_bancarias(email):
+    if not supabase:
+        return []
+    try:
+        res = supabase.table("bank_connections").select("*").eq("user_email", email).execute()
+        return res.data or []
+    except Exception:
+        return []
+
+
+def belvo_generar_token_widget():
+    token = _token_sesion_actual()
+    if not token:
+        return None, "Sesión no válida, vuelve a iniciar sesión."
+    try:
+        r = requests.post(_url_funcion("belvo-widget-token"), headers={"Authorization": f"Bearer {token}"}, timeout=15)
+        data = r.json()
+        if r.status_code != 200:
+            return None, data.get("error", "Error desconocido de Belvo.")
+        return data, None
+    except Exception as e:
+        return None, str(e)
+
+
+def belvo_guardar_link(link_id, institucion):
+    token = _token_sesion_actual()
+    if not token:
+        return False, "Sesión no válida."
+    try:
+        r = requests.post(_url_funcion("belvo-store-link"), headers={"Authorization": f"Bearer {token}"},
+                           json={"link_id": link_id, "institucion": institucion}, timeout=15)
+        data = r.json()
+        return (r.status_code == 200), data.get("error")
+    except Exception as e:
+        return False, str(e)
+
+
+def belvo_sincronizar(link_id):
+    token = _token_sesion_actual()
+    if not token:
+        return None, "Sesión no válida."
+    try:
+        r = requests.post(_url_funcion("belvo-sync-transactions"), headers={"Authorization": f"Bearer {token}"},
+                           json={"link_id": link_id}, timeout=60)
+        data = r.json()
+        if r.status_code != 200:
+            return None, data.get("error", "Error al sincronizar.")
+        return data, None
+    except Exception as e:
+        return None, str(e)
 
 # ============================================================
 # CARGA DE DATOS CENTRALIZADA
@@ -502,14 +600,18 @@ elif not st.session_state["user"]:
     with c1:
         if st.button("Entrar", key="login_btn"):
             if correo and clave:
-                if correo == CORREO_ADMIN or supabase:
+                if supabase:
+                    # CORREGIDO: antes había una excepción que dejaba entrar al
+                    # admin (CORREO_ADMIN) con CUALQUIER contraseña, sin verificarla
+                    # contra Supabase. Ahora TODOS, sin excepción, se autentican de
+                    # verdad — incluido el administrador.
                     try:
-                        res = supabase.auth.sign_in_with_password({"email": correo, "password": clave}) if supabase and correo != CORREO_ADMIN else None
+                        res = supabase.auth.sign_in_with_password({"email": correo, "password": clave})
                         user_obj = res.user if res else None
                     except Exception:
                         user_obj = None
 
-                    if user_obj or correo == CORREO_ADMIN:
+                    if user_obj:
                         st.session_state["user"] = correo
                         st.session_state["plan"] = get_user_plan(correo)
                         if not st.session_state["nombre_usuario"]:
@@ -518,6 +620,8 @@ elif not st.session_state["user"]:
                         st.rerun()
                     else:
                         st.sidebar.error("Credenciales inválidas.")
+                else:
+                    st.sidebar.error("Sin conexión a base de datos.")
             else:
                 st.sidebar.error("Ingresa correo y contraseña.")
     with c2:
@@ -538,7 +642,7 @@ elif not st.session_state["user"]:
 else:
     if st.session_state["foto_perfil"]:
         st.sidebar.image(st.session_state["foto_perfil"], width=80)
-    
+
     nombre_actual = st.session_state.get("nombre_usuario") or st.session_state["user"].split("@")[0]
     st.sidebar.markdown(f"### Hola, **{nombre_actual}**")
     st.sidebar.caption(st.session_state["user"])
@@ -555,16 +659,16 @@ else:
     with st.sidebar.expander("👤 Perfil Profesional y Seguridad"):
         nuevo_nombre = st.text_input("Nombre de visualización", value=st.session_state.get("nombre_usuario", ""))
         nueva_foto = st.text_input("URL de foto de perfil", value=st.session_state.get("foto_perfil", ""))
-        
+
         st.markdown("---")
         st.markdown("#### Cambiar Contraseña")
         pass_nueva = st.text_input("Nueva contraseña", type="password", key="pass_nue")
-        
+
         if st.button("Actualizar datos de perfil"):
             st.session_state["nombre_usuario"] = nuevo_nombre
             st.session_state["foto_perfil"] = nueva_foto
-            
-            if pass_nueva and supabase and st.session_state["user"] != CORREO_ADMIN:
+
+            if pass_nueva and supabase:
                 try:
                     supabase.auth.update_user({"password": pass_nueva})
                     st.success("Contraseña y perfil actualizados.")
@@ -634,14 +738,14 @@ hogar = obtener_hogar(email) if supabase else None
 # TABS PRINCIPALES (Con Admin condicional)
 # ============================================================
 tabs_nombres = [
-    "📊 Resumen", "➕ Registrar", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
+    "📊 Resumen", "➕ Registrar", "🏦 Conectar Banco", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
 ]
 if es_administrador():
     tabs_nombres.append("🛡️ Admin")
 
 tabs = st.tabs(tabs_nombres)
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:8]
-tab_admin = tabs[8] if es_administrador() else None
+tab1, tab2, tab_banco, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:9]
+tab_admin = tabs[9] if es_administrador() else None
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
@@ -696,11 +800,11 @@ with tab1:
         # ── SEMÁFORO DE DINERO LIBRE PARA GASTAR ──
         presupuesto_total_asignado = df_cat[df_cat["tipo"] == "gasto"]["presupuesto_mensual"].sum() if not df_cat.empty else 0
         dinero_libre_real = max(0, total_ingreso - total_gasto - presupuesto_total_asignado)
-        
+
         st.markdown("---")
         st.markdown("#### 🟢 Semáforo de Dinero Disponible Real")
         col_lib1, col_lib2 = st.columns([2, 1])
-        col_lib1.info(f"💡 Te quedan **{dinero(dinero_libre_real)}** libres este mes tras cubrir tus gastos y metas presupuestadas.")
+        col_lib1.info(f"💡 Te quedan **{dinero_md(dinero_libre_real)}** libres este mes tras cubrir tus gastos y metas presupuestadas.")
         col_lib2.metric("Dinero libre real", dinero(dinero_libre_real))
 
         tasa_ahorro = balance / total_ingreso if total_ingreso > 0 else 0
@@ -782,6 +886,69 @@ with tab2:
 # ============================================================
 # TAB 3: PRESUPUESTO BASE CERO Y CATEGORÍAS
 # ============================================================
+with tab_banco:
+    st.subheader("🏦 Conectar Banco")
+    st.info("🧪 Modo **sandbox** (datos de prueba de Belvo, no tu banco real todavía). Activar producción real es una decisión de negocio aparte — cuesta desde ~$1.000 USD/mes según el plan público de Belvo.")
+
+    if not es_pro:
+        st.info("✨ La conexión bancaria automática está en el plan Pro.")
+    else:
+        conexiones = obtener_conexiones_bancarias(email)
+
+        if conexiones:
+            st.markdown("#### Bancos conectados")
+            for c in conexiones:
+                col_a, col_b, col_c = st.columns([2, 1.3, 1])
+                col_a.write(f"🏦 **{c.get('institucion', 'Banco')}**")
+                ultima = c.get("ultima_sincronizacion")
+                col_b.caption(f"Última sync: {ultima[:16] if ultima else 'nunca'}")
+                if col_c.button("🔄 Sincronizar", key=f"sync_{c['id']}"):
+                    with st.spinner("Trayendo movimientos..."):
+                        resultado, err = belvo_sincronizar(c["belvo_link_id"])
+                    if resultado:
+                        st.success(f"{resultado['nuevas_insertadas']} movimientos nuevos importados (de {resultado['total_encontradas']} encontrados).")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"No se pudo sincronizar: {err}")
+            st.divider()
+
+        st.markdown("#### ➕ Conectar un banco nuevo")
+        token_widget, err_token = belvo_generar_token_widget()
+
+        if err_token:
+            st.error(f"No se pudo preparar la conexión: {err_token}")
+            st.caption("Revisa que BELVO_SECRET_ID y BELVO_SECRET_PASSWORD estén configurados como secrets en Supabase (Edge Functions → Secrets).")
+        elif token_widget:
+            components.html(
+                f"""
+                <div id="belvo-container"></div>
+                <script src="https://cdn.belvo.io/belvo-widget-1-stable.js"></script>
+                <script>
+                belvoSDK.createWidget("{token_widget['access_token']}", {{
+                    locale: "es",
+                    country_codes: ["CO"],
+                    callback: function(link, institution) {{
+                        fetch("{_url_funcion('belvo-store-link')}", {{
+                            method: "POST",
+                            headers: {{
+                                "Content-Type": "application/json",
+                                "Authorization": "Bearer {_token_sesion_actual()}"
+                            }},
+                            body: JSON.stringify({{ link_id: link, institucion: institution }})
+                        }}).then(function() {{
+                            document.getElementById("belvo-container").innerHTML =
+                                "<p style='color:#1F4D3D;font-weight:600;'>✅ Banco conectado. Cierra esta ventana y recarga la página para verlo en tu lista.</p>";
+                        }});
+                    }},
+                    onExit: function() {{}},
+                }}).build();
+                </script>
+                """,
+                height=520,
+            )
+            st.caption("Se abre el widget oficial de Belvo. En sandbox, usa cualquier banco de la lista con credenciales de prueba (Belvo las muestra en pantalla).")
+
 with tab3:
     st.subheader("🎯 Presupuesto Base Cero y Gestión de Categorías")
     st.markdown("La premisa: **Ingresos Totales - Ahorros - Gastos Asignados = 0**. Cada unidad de dinero tiene un propósito.")
@@ -797,30 +964,37 @@ with tab3:
             for _, fila in df_cat[df_cat["tipo"] == "gasto"].iterrows():
                 col1, col2, col3 = st.columns([2, 1, 0.8])
                 col1.write(f"{icono_categoria(fila['name'])} **{fila['name']}**")
-                
+
                 valor_base = float(fila["presupuesto_mensual"]) if pd.notna(fila["presupuesto_mensual"]) else 0.0
                 total_presupuestado += valor_base
 
+                # CORREGIDO: antes se comparaba el redondeo COP->moneda->COP contra
+                # el valor guardado, y una simple fluctuación del tipo de cambio (o
+                # el redondeo mismo) podía disparar una escritura en la base de datos
+                # sin que el usuario tocara nada. Ahora se compara en el MISMO
+                # espacio de unidades que ve el usuario (moneda mostrada), antes de
+                # convertir — solo una edición real genera una diferencia.
+                valor_mostrado_actual = float(round(a_moneda(valor_base), 2))
                 nuevo_valor = col2.number_input(
                     f"Presupuesto {fila['name']}",
                     min_value=0.0,
                     step=50.0,
-                    value=float(round(a_moneda(valor_base), 2)),
+                    value=valor_mostrado_actual,
                     key=f"presu_{fila['id']}",
                     label_visibility="collapsed",
                 )
-                
+
                 if col3.button("🗑️", key=f"del_cat_{fila['id']}"):
                     try:
                         supabase.table("categories").delete().eq("id", fila["id"]).execute()
-                        st.success(f"Categoría eliminada.")
+                        st.success("Categoría eliminada.")
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-                nuevo_base = a_cop(nuevo_valor)
-                if abs(nuevo_base - valor_base) > 0.01:
+                if abs(nuevo_valor - valor_mostrado_actual) > 0.001:
+                    nuevo_base = a_cop(nuevo_valor)
                     try:
                         supabase.table("categories").update({"presupuesto_mensual": nuevo_base}).eq("id", fila["id"]).execute()
                         st.cache_data.clear()
@@ -867,14 +1041,17 @@ with tab4:
                     objetivo = float(meta["monto_objetivo"] or 1)
                     progreso = min(1.0, actual / objetivo)
                     porcentaje = progreso * 100
-                    
-                    st.markdown(f"**{meta['titulo']}** — {dinero(actual)} / {dinero(objetivo)} ({porcentaje:.1f}%)")
+
+                    # CORREGIDO: dos montos (dinero()) en la misma línea de
+                    # st.markdown disparaban el modo LaTeX de Streamlit (ver
+                    # comentario en dinero_md). Se usa la versión escapada.
+                    st.markdown(f"**{meta['titulo']}** — {dinero_md(actual)} / {dinero_md(objetivo)} ({porcentaje:.1f}%)")
                     st.progress(progreso)
-                    
+
                     # Botón para abonar
                     c_abonar1, c_abonar2 = st.columns([1, 1])
                     abono_val = c_abonar1.number_input(f"Abonar a {meta['id']}", min_value=0.0, step=10.0, key=f"abono_input_{meta['id']}", label_visibility="collapsed")
-                    if c_abonar2.button(f"Abonar", key=f"btn_abono_{meta['id']}"):
+                    if c_abonar2.button("Abonar", key=f"btn_abono_{meta['id']}"):
                         nuevo_actual = actual + a_cop(abono_val)
                         try:
                             supabase.table("savings_goals").update({"monto_actual": nuevo_actual}).eq("id", meta["id"]).execute()
@@ -916,12 +1093,11 @@ with tab4:
 # ============================================================
 with tab5:
     st.subheader("🔍 Auditoría Inteligente de Gastos Hormiga y Suscripciones")
-    st.caption("La IA escanea tus transacciones para detectar fugas silenciosas de dinero.")
+    st.caption("Revisa tus transacciones para detectar fugas silenciosas de dinero por palabras clave.")
 
     if df_tx.empty:
-        st.info("Registra transacciones para activar la auditoría inteligente.")
+        st.info("Registra transacciones para activar la auditoría.")
     else:
-        # Detectar suscripciones recurrentes frecuentes
         df_tx_audit = df_tx.copy()
         sus_palabras = ["netflix", "spotify", "disney", "hbo", "prime", "youtube", "icloud", "chatgpt", "gimnasio", "gym"]
         mask_sus = df_tx_audit["descripcion"].astype(str).str.lower().apply(lambda x: any(p in x for p in sus_palabras))
@@ -932,7 +1108,7 @@ with tab5:
             st.success("✅ No se detectaron suscripciones recurrentes comunes en tus registros recientes.")
         else:
             total_sus = df_suscripciones["monto"].abs().sum()
-            st.warning(f"⚠️ Encontramos transacciones asociadas a servicios recurrentes que suman **{dinero(total_sus)}**. ¿Usas todas activamente?")
+            st.warning(f"⚠️ Encontramos transacciones asociadas a servicios recurrentes que suman **{dinero_md(total_sus)}**. ¿Usas todas activamente?")
             st.dataframe(df_suscripciones[["fecha", "descripcion", "monto", "categoria"]], use_container_width=True)
 
         st.markdown("#### ☕ Análisis de Gastos Hormiga")
@@ -940,7 +1116,7 @@ with tab5:
         df_hormigas = df_tx_audit[mask_hormiga]
         if not df_hormigas.empty:
             total_hormigas = df_hormigas["monto"].abs().sum()
-            st.info(f"💡 Tus microcompras en cafeterías, transporte exprés o plataformas de entrega suman **{dinero(total_hormigas)}** este periodo.")
+            st.info(f"💡 Tus microcompras en cafeterías, transporte exprés o plataformas de entrega suman **{dinero_md(total_hormigas)}** este periodo.")
 
 # ============================================================
 # TAB 6: EDUCACIÓN FINANCIERA (SPOTIFY WRAPPED Y CONSEJOS)
@@ -949,22 +1125,21 @@ with tab6:
     st.subheader("📚 Educación y Reporte Spotify Wrapped Financiero")
     st.caption("Resumen narrativo y principios clave para transformar tu relación con el dinero.")
 
-    # ── SPOTIFY WRAPPED FINANCIERO ──
     st.markdown("#### 📊 Tu Wrapped Financiero del Mes")
     hoy = pd.Timestamp.today()
     if not df_tx.empty:
         df_t_wrap = df_tx.copy()
         df_t_wrap["mes"] = df_t_wrap["fecha"].dt.to_period("M")
         df_mes_wrap = df_t_wrap[df_t_wrap["mes"] == hoy.to_period("M")]
-        
+
         gasto_cat_w = set(df_cat[df_cat["tipo"] == "gasto"]["name"]) if not df_cat.empty else set()
         gw_mask = df_mes_wrap["categoria"].isin(gasto_cat_w) if gasto_cat_w else df_mes_wrap["monto"] < 0
-        
+
         if not df_mes_wrap[gw_mask].empty:
             gasto_por_c = df_mes_wrap[gw_mask].groupby("categoria")["monto"].sum().abs()
             cat_reina = gasto_por_c.idxmax()
             monto_reina = gasto_por_c.max()
-            
+
             st.markdown(
                 f"""
                 <div class="consejo-card consejo-bueno">
@@ -1026,6 +1201,10 @@ with tab8:
 
 # ============================================================
 # PANEL DE ADMINISTRADOR (EXCLUSIVO minatobrasil6@gmail.com)
+# La verificación real de identidad ocurre al iniciar sesión (Supabase Auth) —
+# es_administrador() solo decide qué se MUESTRA, no otorga acceso a datos por
+# sí sola. El acceso real a los datos de otros usuarios lo controla el RLS de
+# la base de datos (políticas corregidas por separado).
 # ============================================================
 if es_administrador() and tab_admin is not None:
     with tab_admin:
@@ -1034,7 +1213,7 @@ if es_administrador() and tab_admin is not None:
         col_a, col_b = st.columns(2)
         col_a.metric("Base de Datos", "Conectada" if db_connected else "Modo Demo")
         col_b.metric("Tasa de Cambio", f"1 USD = {tasa_usd_cop():,.2f} COP")
-        
+
         st.divider()
         if st.button("Limpiar caché de la aplicación"):
             st.cache_data.clear()
