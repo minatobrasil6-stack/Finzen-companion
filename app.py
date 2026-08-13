@@ -40,18 +40,48 @@ st.set_page_config(
 import streamlit.components.v1 as components
 components.html(
     """
-    <link rel="manifest" href="./app/static/manifest.json">
-    <link rel="icon" href="./app/static/icon-192.png">
-    <link rel="apple-touch-icon" href="./app/static/icon-192.png">
-    <meta name="theme-color" content="#1F4D3D">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="FinZen">
     <script>
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./app/static/service-worker.js').catch(function(e) {
-            console.log('Service worker no registrado:', e);
-        });
-    }
+    (function() {
+        try {
+            var doc = window.parent.document;
+            var head = doc.head;
+
+            function agregarTag(tag, atributos) {
+                if (doc.querySelector(tag + '[rel="' + atributos.rel + '"]')) return;
+                var el = doc.createElement(tag);
+                for (var k in atributos) { el.setAttribute(k, atributos[k]); }
+                head.appendChild(el);
+            }
+
+            // Manifest, íconos y meta tags -- inyectados en el <head> REAL de
+            // la página, no en el iframe aislado de components.html (ese era
+            // el bug: el navegador nunca los veía).
+            agregarTag('link', { rel: 'manifest', href: './app/static/manifest.json' });
+            agregarTag('link', { rel: 'icon', href: './app/static/icon-192.png' });
+            agregarTag('link', { rel: 'apple-touch-icon', href: './app/static/icon-192.png' });
+
+            if (!doc.querySelector('meta[name="theme-color"]')) {
+                var m1 = doc.createElement('meta'); m1.name = 'theme-color'; m1.content = '#1F4D3D'; head.appendChild(m1);
+            }
+            if (!doc.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+                var m2 = doc.createElement('meta'); m2.name = 'apple-mobile-web-app-capable'; m2.content = 'yes'; head.appendChild(m2);
+            }
+            if (!doc.querySelector('meta[name="apple-mobile-web-app-title"]')) {
+                var m3 = doc.createElement('meta'); m3.name = 'apple-mobile-web-app-title'; m3.content = 'FinZen'; head.appendChild(m3);
+            }
+
+            // Service worker: registrado contra el navigator de la ventana
+            // PADRE (la página real), no el del iframe -- si se registra
+            // dentro del iframe, controla solo ese iframe, no la app.
+            if ('serviceWorker' in window.parent.navigator) {
+                window.parent.navigator.serviceWorker.register('./app/static/service-worker.js').catch(function(e) {
+                    console.log('Service worker no registrado:', e);
+                });
+            }
+        } catch (e) {
+            console.log('No se pudo inyectar el manifest en la página padre:', e);
+        }
+    })();
     </script>
     """,
     height=0,
