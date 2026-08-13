@@ -1101,6 +1101,18 @@ with tab2:
             except Exception as e:
                 st.error(f"Error al guardar: {e}")
 
+    st.divider()
+    st.markdown("#### Movimientos recientes")
+    if df_tx.empty:
+        st.caption("Sin movimientos todavía.")
+    else:
+        df_mostrar = df_tx.sort_values("fecha", ascending=False).head(30).copy()
+        df_mostrar["Fecha"] = df_mostrar["fecha"].dt.strftime("%Y-%m-%d")
+        df_mostrar["Categoría"] = df_mostrar["categoria"].apply(lambda c: f"{icono_categoria(c)} {c}" if pd.notna(c) else c)
+        df_mostrar["Descripción"] = df_mostrar["descripcion"]
+        df_mostrar["Monto"] = df_mostrar["monto"].apply(lambda m: dinero(m))
+        st.dataframe(df_mostrar[["Fecha", "Categoría", "Descripción", "Monto"]], use_container_width=True, hide_index=True)
+
 # ============================================================
 # TAB 3: PRESUPUESTO BASE CERO Y CATEGORÍAS
 # ============================================================
