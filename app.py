@@ -556,9 +556,10 @@ def restaurar_sesion_desde_cookie():
         res = supabase.auth.refresh_session(refresh_token)
         if res and res.user:
             st.session_state["user"] = res.user.email
-            st.session_state["plan"] = get_user_plan(res.user.email)
-            if not st.session_state["nombre_usuario"]:
-                st.session_state["nombre_usuario"] = res.user.email.split("@")[0].capitalize()
+            plan, nombre_guardado, foto_guardada = get_user_plan(res.user.email)
+            st.session_state["plan"] = plan
+            st.session_state["nombre_usuario"] = nombre_guardado or res.user.email.split("@")[0].capitalize()
+            st.session_state["foto_perfil"] = foto_guardada
             asegurar_categorias_defecto(res.user.email)
             guardar_sesion_en_cookie(res.session)  # Supabase rota el refresh token: guardar el nuevo
             st.rerun()
@@ -567,16 +568,31 @@ def restaurar_sesion_desde_cookie():
 
 
 def get_user_plan(email):
+    """Devuelve (status, nombre_usuario, foto_perfil) — antes solo devolvía el
+    plan; el nombre y la foto vivían solo en session_state y se perdían en
+    cada recarga o reinicio de sesión."""
     if not supabase:
-        return "free"
+        return "free", "", ""
     try:
-        res = supabase.table("subscriptions").select("status").eq("user_email", email).execute()
+        res = supabase.table("subscriptions").select("status, nombre_usuario, foto_perfil").eq("user_email", email).execute()
         if res.data:
-            return res.data[0].get("status", "free")
+            fila = res.data[0]
+            return fila.get("status", "free"), fila.get("nombre_usuario") or "", fila.get("foto_perfil") or ""
         supabase.table("subscriptions").insert({"user_email": email, "status": "free"}).execute()
-        return "free"
+        return "free", "", ""
     except Exception:
-        return "free"
+        return "free", "", ""
+
+
+def guardar_perfil(email, nombre, foto):
+    if not supabase:
+        return False, "Sin conexión a base de datos."
+    try:
+        supabase.table("subscriptions").update({"nombre_usuario": nombre, "foto_perfil": foto}).eq("user_email", email).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 
 def asegurar_categorias_defecto(email):
     if not supabase:
@@ -787,9 +803,10 @@ elif not st.session_state["user"]:
 
                     if user_obj:
                         st.session_state["user"] = correo
-                        st.session_state["plan"] = get_user_plan(correo)
-                        if not st.session_state["nombre_usuario"]:
-                            st.session_state["nombre_usuario"] = correo.split("@")[0].capitalize()
+                        plan, nombre_guardado, foto_guardada = get_user_plan(correo)
+                        st.session_state["plan"] = plan
+                        st.session_state["nombre_usuario"] = nombre_guardado or correo.split("@")[0].capitalize()
+                        st.session_state["foto_perfil"] = foto_guardada
                         asegurar_categorias_defecto(correo)
                         guardar_sesion_en_cookie(session_obj)
                         st.rerun()
@@ -840,16 +857,20 @@ else:
         pass_nueva = st.text_input("Nueva contraseña", type="password", key="pass_nue")
 
         if st.button("Actualizar datos de perfil"):
-            st.session_state["nombre_usuario"] = nuevo_nombre
-            st.session_state["foto_perfil"] = nueva_foto
+            ok_perfil, err_perfil = guardar_perfil(st.session_state["user"], nuevo_nombre, nueva_foto)
+            if ok_perfil:
+                st.session_state["nombre_usuario"] = nuevo_nombre
+                st.session_state["foto_perfil"] = nueva_foto
+            else:
+                st.error(f"No se pudo guardar el perfil: {err_perfil}")
 
             if pass_nueva and supabase:
                 try:
                     supabase.auth.update_user({"password": pass_nueva})
                     st.success("Contraseña y perfil actualizados.")
                 except Exception as e:
-                    st.error(f"Error: {e}")
-            else:
+                    st.error(f"Error al cambiar la contraseña: {e}")
+            elif ok_perfil:
                 st.success("Perfil actualizado con éxito.")
             st.rerun()
 
@@ -1062,15 +1083,67 @@ with tab2:
 
     st.divider()
     st.markdown("#### Movimientos recientes")
+    st.caption("Edita fecha, categoría, descripción o monto directo en la tabla, o elimina una fila con 🗑️ — luego dale **Guardar cambios**. El monto se edita siempre en COP (independiente de tu moneda de visualización) para evitar diferencias de redondeo por tipo de cambio.")
     if df_tx.empty:
         st.caption("Sin movimientos todavía.")
     else:
-        df_mostrar = df_tx.sort_values("fecha", ascending=False).head(30).copy()
-        df_mostrar["Fecha"] = df_mostrar["fecha"].dt.strftime("%Y-%m-%d")
-        df_mostrar["Categoría"] = df_mostrar["categoria"].apply(lambda c: f"{icono_categoria(c)} {c}" if pd.notna(c) else c)
-        df_mostrar["Descripción"] = df_mostrar["descripcion"]
-        df_mostrar["Monto"] = df_mostrar["monto"].apply(lambda m: dinero(m))
-        st.dataframe(df_mostrar[["Fecha", "Categoría", "Descripción", "Monto"]], use_container_width=True, hide_index=True)
+        todas_categorias_tabla = df_cat["name"].tolist() if not df_cat.empty else []
+        df_editable = df_tx.sort_values("fecha", ascending=False).head(30)[["id", "fecha", "categoria", "descripcion", "monto"]].copy()
+        df_editable["fecha"] = df_editable["fecha"].dt.date
+
+        df_editado = st.data_editor(
+            df_editable,
+            column_order=["fecha", "categoria", "descripcion", "monto"],
+            column_config={
+                "id": None,
+                "fecha": st.column_config.DateColumn("Fecha"),
+                "categoria": st.column_config.SelectboxColumn("Categoría", options=todas_categorias_tabla),
+                "descripcion": st.column_config.TextColumn("Descripción"),
+                "monto": st.column_config.NumberColumn("Monto (COP)", format="%.0f", help="Negativo = gasto, positivo = ingreso"),
+            },
+            num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_movimientos_tab2",
+        )
+
+        if st.button("💾 Guardar cambios en movimientos", key="btn_guardar_editor_tx"):
+            ids_originales = set(df_editable["id"])
+            ids_editados = set(df_editado["id"].dropna())
+            eliminados = ids_originales - ids_editados
+            errores = []
+
+            for id_del in eliminados:
+                try:
+                    supabase.table("transactions").delete().eq("id", id_del).execute()
+                except Exception as e:
+                    errores.append(str(e))
+
+            for _, fila in df_editado.iterrows():
+                if pd.isna(fila.get("id")):
+                    continue  # fila nueva agregada en la tabla sin pasar por el formulario: se ignora
+                original = df_editable[df_editable["id"] == fila["id"]]
+                if original.empty:
+                    continue
+                orig = original.iloc[0]
+                cambios = {}
+                if float(fila["monto"]) != float(orig["monto"]):
+                    cambios["monto"] = float(fila["monto"])
+                if fila["categoria"] != orig["categoria"]:
+                    cambios["categoria"] = fila["categoria"]
+                if fila["descripcion"] != orig["descripcion"]:
+                    cambios["descripcion"] = fila["descripcion"]
+                if pd.Timestamp(fila["fecha"]) != pd.Timestamp(orig["fecha"]):
+                    cambios["fecha"] = fila["fecha"].isoformat()
+                if cambios:
+                    try:
+                        supabase.table("transactions").update(cambios).eq("id", fila["id"]).execute()
+                    except Exception as e:
+                        errores.append(str(e))
+
+            if errores:
+                st.error(f"Algunos cambios no se pudieron guardar: {'; '.join(errores)}")
+            else:
+                st.success("Cambios guardados.")
+                st.cache_data.clear()
+                st.rerun()
 
 # ============================================================
 # TAB 3: PRESUPUESTO BASE CERO Y CATEGORÍAS
