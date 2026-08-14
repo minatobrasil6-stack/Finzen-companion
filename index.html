@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>FinZen</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icon.png">
+  <link rel="apple-touch-icon" href="./icon.png">
+  <meta name="theme-color" content="#1F4D3D">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="FinZen">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #FAF7F1; font-family: -apple-system, sans-serif; }
+    iframe { width: 100%; height: 100%; border: none; display: block; }
+    #offline-banner {
+      display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 999;
+      background: #E8734A; color: white; text-align: center; padding: 10px;
+      font-size: 14px; font-weight: 600;
+    }
+    #offline-banner.mostrar { display: block; }
+  </style>
+</head>
+<body>
+  <div id="offline-banner">📡 Sin conexión — FinZen necesita internet para cargar tus datos.</div>
+  <!--
+    IMPORTANTE: reemplaza esta URL por la de tu app real desplegada en
+    Streamlit Cloud. El parámetro ?embed=true quita el header/footer propio
+    de Streamlit para que se vea como una app nativa, sin su barra superior.
+  -->
+  <iframe
+    src="https://TU-URL-DE-FINZEN.streamlit.app/?embed=true"
+    title="FinZen"
+    allow="clipboard-write; camera; microphone"
+  ></iframe>
+
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./service-worker.js");
+    }
+
+    function actualizarEstadoConexion() {
+      document.getElementById("offline-banner").classList.toggle("mostrar", !navigator.onLine);
+    }
+    window.addEventListener("online", actualizarEstadoConexion);
+    window.addEventListener("offline", actualizarEstadoConexion);
+    actualizarEstadoConexion();
+  </script>
+</body>
+</html>
