@@ -936,14 +936,14 @@ hogar = obtener_hogar(email) if supabase else None
 # TABS PRINCIPALES (Con Admin condicional)
 # ============================================================
 tabs_nombres = [
-    "📊 Resumen", "➕ Registrar", "🏦 Conectar Banco", "🌍 Contexto Económico", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
+    "📊 Resumen", "➕ Registrar", "🌍 Contexto Económico", "🎯 Base Cero", "🎯 Metas", "🔍 Auditoría", "📚 Educación", "🏠 Hogar", "⚖️ Legal"
 ]
 if es_administrador():
     tabs_nombres.append("🛡️ Admin")
 
 tabs = st.tabs(tabs_nombres)
-tab1, tab2, tab_banco, tab_macro, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:10]
-tab_admin = tabs[10] if es_administrador() else None
+tab1, tab2, tab_macro, tab3, tab4, tab5, tab6, tab7, tab8 = tabs[:9]
+tab_admin = tabs[9] if es_administrador() else None
 
 df_tx_todo = cargar_transacciones(email)
 df_cat_todo = cargar_categorias(email)
@@ -1148,68 +1148,12 @@ with tab2:
 # ============================================================
 # TAB 3: PRESUPUESTO BASE CERO Y CATEGORÍAS
 # ============================================================
-with tab_banco:
-    st.subheader("🏦 Conectar Banco")
-    st.info("🧪 Modo **sandbox** (datos de prueba de Belvo, no tu banco real todavía). Activar producción real es una decisión de negocio aparte — cuesta desde ~$1.000 USD/mes según el plan público de Belvo.")
-
-    if not es_pro:
-        st.info("✨ La conexión bancaria automática está en el plan Pro.")
-    else:
-        conexiones = obtener_conexiones_bancarias(email)
-
-        if conexiones:
-            st.markdown("#### Bancos conectados")
-            for c in conexiones:
-                col_a, col_b, col_c = st.columns([2, 1.3, 1])
-                col_a.write(f"🏦 **{c.get('institucion', 'Banco')}**")
-                ultima = c.get("ultima_sincronizacion")
-                col_b.caption(f"Última sync: {ultima[:16] if ultima else 'nunca'}")
-                if col_c.button("🔄 Sincronizar", key=f"sync_{c['id']}"):
-                    with st.spinner("Trayendo movimientos..."):
-                        resultado, err = belvo_sincronizar(c["belvo_link_id"])
-                    if resultado:
-                        st.success(f"{resultado['nuevas_insertadas']} movimientos nuevos importados (de {resultado['total_encontradas']} encontrados).")
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error(f"No se pudo sincronizar: {err}")
-            st.divider()
-
-        st.markdown("#### ➕ Conectar un banco nuevo")
-        token_widget, err_token = belvo_generar_token_widget()
-
-        if err_token:
-            st.error(f"No se pudo preparar la conexión: {err_token}")
-            st.caption("Revisa que BELVO_SECRET_ID y BELVO_SECRET_PASSWORD estén configurados como secrets en Supabase (Edge Functions → Secrets).")
-        elif token_widget:
-            components.html(
-                f"""
-                <div id="belvo-container"></div>
-                <script src="https://cdn.belvo.io/belvo-widget-1-stable.js"></script>
-                <script>
-                belvoSDK.createWidget("{token_widget['access_token']}", {{
-                    locale: "es",
-                    country_codes: ["CO"],
-                    callback: function(link, institution) {{
-                        fetch("{_url_funcion('belvo-store-link')}", {{
-                            method: "POST",
-                            headers: {{
-                                "Content-Type": "application/json",
-                                "Authorization": "Bearer {_token_sesion_actual()}"
-                            }},
-                            body: JSON.stringify({{ link_id: link, institucion: institution }})
-                        }}).then(function() {{
-                            document.getElementById("belvo-container").innerHTML =
-                                "<p style='color:#1F4D3D;font-weight:600;'>✅ Banco conectado. Cierra esta ventana y recarga la página para verlo en tu lista.</p>";
-                        }});
-                    }},
-                    onExit: function() {{}},
-                }}).build();
-                </script>
-                """,
-                height=520,
-            )
-            st.caption("Se abre el widget oficial de Belvo. En sandbox, usa cualquier banco de la lista con credenciales de prueba (Belvo las muestra en pantalla).")
+# La pestaña "🏦 Conectar Banco" (Belvo) está desactivada por ahora a pedido
+# del usuario. Todo el código y la infraestructura (Edge Functions, tabla
+# bank_connections en Supabase) siguen intactos — no se borró nada del backend,
+# solo se quitó de la navegación. El bloque de interfaz que iba aquí quedó
+# guardado en banco_belvo_desactivado.txt para poder reactivarlo fácilmente
+# más adelante, sin tener que reconstruirlo desde cero.
 
 with tab_macro:
     st.subheader("🌍 Contexto Económico")
