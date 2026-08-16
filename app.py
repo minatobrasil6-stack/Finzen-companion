@@ -528,28 +528,59 @@ def get_cookie_manager():
 
 cookie_manager = get_cookie_manager()
 
+# CORREGIDO: llamar a cookie_manager.set() y st.rerun() en la misma pasada del
+# script interrumpe al componente antes de que termine de escribir la cookie
+# en el navegador (comportamiento documentado del propio componente). La
+# solución: guardar el refresh token en session_state y escribir la cookie en
+# la SIGUIENTE ejecución del script, sin ningún rerun compitiendo en el medio.
+if st.session_state.get("_refresh_token_pendiente") and cookie_manager:
+    _token_pendiente = st.session_state.pop("_refresh_token_pendiente")
+    cookie_manager.set(NOMBRE_COOKIE_SESION, _token_pendiente,
+                        expires_at=datetime.now() + timedelta(days=30), key="set_cookie_login")
+
+if st.session_state.get("_cookie_pendiente_borrar") and cookie_manager:
+    st.session_state["_cookie_pendiente_borrar"] = False
+    try:
+        cookie_manager.delete(NOMBRE_COOKIE_SESION, key="del_cookie_login")
+    except Exception:
+        pass
+
 
 def guardar_sesion_en_cookie(session):
-    if cookie_manager and session and getattr(session, "refresh_token", None):
-        cookie_manager.set(NOMBRE_COOKIE_SESION, session.refresh_token,
-                            expires_at=datetime.now() + timedelta(days=30), key="set_cookie_login")
+    """No escribe la cookie de inmediato: la deja pendiente para la próxima
+    ejecución del script (ver bloque arriba) — necesario para que el
+    componente de cookies tenga tiempo real de comunicarse con el navegador."""
+    if session and getattr(session, "refresh_token", None):
+        st.session_state["_refresh_token_pendiente"] = session.refresh_token
 
 
 def borrar_cookie_sesion():
-    if cookie_manager:
-        try:
-            cookie_manager.delete(NOMBRE_COOKIE_SESION, key="del_cookie_login")
-        except Exception:
-            pass
+    """Igual que guardar_sesion_en_cookie: se difiere para evitar la misma
+    condición de carrera si justo después se llama a st.rerun()."""
+    st.session_state["_cookie_pendiente_borrar"] = True
 
 
 def restaurar_sesion_desde_cookie():
-    """Se ejecuta una sola vez por sesión de navegador. Si hay una cookie con un
-    refresh token válido, reconstruye la sesión de Supabase sin pedir contraseña."""
-    if not (supabase and cookie_manager) or st.session_state["user"] or st.session_state["intento_restaurar_sesion"]:
+    """El componente de cookies puede tardar 1-2 ejecuciones del script en
+    sincronizarse con el navegador antes de poder leer nada (comportamiento
+    documentado) — por eso NO nos rendimos tras un solo intento con valor
+    vacío: distinguimos 'todavía no sincronizó' de 'de verdad no hay cookie'."""
+    if not (supabase and cookie_manager) or st.session_state["user"]:
+        return
+
+    todas_las_cookies = cookie_manager.get_all()
+    if todas_las_cookies is None:
+        intentos = st.session_state.get("intentos_cookie", 0)
+        if intentos < 3:
+            st.session_state["intentos_cookie"] = intentos + 1
+            st.rerun()
+        return  # se agotaron los intentos: seguir como si no hubiera sesión
+
+    if st.session_state["intento_restaurar_sesion"]:
         return
     st.session_state["intento_restaurar_sesion"] = True
-    refresh_token = cookie_manager.get(NOMBRE_COOKIE_SESION)
+
+    refresh_token = todas_las_cookies.get(NOMBRE_COOKIE_SESION)
     if not refresh_token:
         return
     try:
