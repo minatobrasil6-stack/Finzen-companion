@@ -7,12 +7,6 @@ import math
 import requests
 from datetime import date, datetime, timedelta
 
-try:
-    import extra_streamlit_components as stx
-    COOKIES_AVAILABLE = True
-except ImportError:
-    COOKIES_AVAILABLE = False
-
 # ============================================================
 # FINZEN — app.py
 # Versión Definitiva: Automatización Pro, Presupuesto Base Cero,
@@ -269,25 +263,48 @@ REGLAS_CATEGORIZACION = {
 # MONEDA Y TIPO DE CAMBIO
 # ============================================================
 @st.cache_data(ttl=900, show_spinner=False)
+def _obtener_tipo_cambio_raw():
+    """Separada de obtener_tipo_cambio_usd_cop() a propósito: si esta función
+    lanza una excepción, Streamlit NO cachea el fallo (solo cachea valores de
+    retorno exitosos) — así una falla puntual de red no queda 'pegada' en caché
+    durante 15 minutos. Antes, el try/except vivía DENTRO de la función
+    cacheada, así que un solo fallo (ej. justo cuando la app despierta en
+    Streamlit Cloud) se guardaba en caché como si fuera el resultado real."""
+    r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10, headers={"User-Agent": "FinZen/1.0"})
+    r.raise_for_status()
+    data = r.json()
+    cop = data.get("rates", {}).get("COP")
+    if not cop or float(cop) <= 0:
+        raise ValueError("La API respondió sin una tasa COP válida")
+    return float(cop), "ExchangeRate-API", pd.Timestamp.now()
+
+
 def obtener_tipo_cambio_usd_cop():
-    try:
-        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=8, headers={"User-Agent": "FinZen/1.0"})
-        if r.ok:
-            data = r.json()
-            cop = data.get("rates", {}).get("COP")
-            if cop and float(cop) > 0:
-                return float(cop), "ExchangeRate-API", pd.Timestamp.now()
-    except Exception:
-        pass
+    """Hasta 2 intentos reales (no cacheados) antes de rendirse — cubre el caso
+    de una falla transitoria de red en el primer intento."""
+    for _ in range(2):
+        try:
+            return _obtener_tipo_cambio_raw()
+        except Exception:
+            continue
     return None, None, None
+
 
 if "moneda" not in st.session_state:
     st.session_state["moneda"] = "COP"
 
 tc_usd_cop, fuente_fx, fecha_fx = obtener_tipo_cambio_usd_cop()
 
+# Respaldo SOLO para que la app no se rompa si la API falla dos veces seguidas
+# -- actualízalo de vez en cuando (verificado ~3.130 COP/USD en agosto 2026;
+# antes decía 4.000, ya bastante desactualizado, y quedaba invisible porque no
+# había ningún aviso de "esto no es en vivo" en pantalla).
+TASA_RESPALDO_NO_EN_VIVO = 3130.0
+
+
 def tasa_usd_cop():
-    return tc_usd_cop if tc_usd_cop and tc_usd_cop > 0 else 4000.0
+    return tc_usd_cop if tc_usd_cop and tc_usd_cop > 0 else TASA_RESPALDO_NO_EN_VIVO
+
 
 def a_moneda(valor_cop):
     valor = float(valor_cop or 0)
@@ -511,91 +528,73 @@ for key, default in [
 
 
 # ============================================================
-# SESIÓN PERSISTENTE — sin esto, st.session_state se borra cada vez que se
-# recarga la página (F5), obligando a iniciar sesión de nuevo aunque el login
-# siga siendo válido. La cookie guarda el "refresh token" de Supabase (NUNCA la
-# contraseña); al recargar, se usa ese token para restaurar la sesión sola.
+# SESIÓN PERSISTENTE — vía st.query_params, NO cookies.
+# ------------------------------------------------------------
+# Streamlit Community Cloud corre cada app dentro de un iframe aislado, y
+# NINGUNA librería de cookies (ni siquiera localStorage) puede escribir ahí
+# de forma confiable — es una limitación documentada de la plataforma, no un
+# bug de nuestro código (confirmado por reportes de otros desarrolladores y
+# por el propio equipo de Streamlit). st.query_params sí funciona, porque es
+# parte de la URL, no del almacenamiento del navegador.
+#
+# Por seguridad, NO se pone el refresh_token real en la URL (quedaría visible
+# en el historial del navegador o si alguien comparte el link sin querer).
+# En su lugar, la URL solo lleva un ID de un solo uso (session_id) que se
+# resuelve contra la tabla web_sessions en Supabase — el token real nunca
+# sale de la base de datos.
 # ============================================================
-NOMBRE_COOKIE_SESION = "finzen_refresh_token"
+PARAM_SESION = "s"
 
 
-def get_cookie_manager():
-    """Sin @st.cache_resource a propósito: CookieManager crea un widget/componente
-    internamente, y Streamlit no permite widgets dentro de funciones cacheadas
-    (dispara CachedWidgetWarning y falla). Es liviano, no necesita cachearse."""
-    return stx.CookieManager(key="finzen_cookie_manager") if COOKIES_AVAILABLE else None
-
-
-cookie_manager = get_cookie_manager()
-
-# CORREGIDO: llamar a cookie_manager.set() y st.rerun() en la misma pasada del
-# script interrumpe al componente antes de que termine de escribir la cookie
-# en el navegador (comportamiento documentado del propio componente). La
-# solución: guardar el refresh token en session_state y escribir la cookie en
-# la SIGUIENTE ejecución del script, sin ningún rerun compitiendo en el medio.
-if st.session_state.get("_refresh_token_pendiente") and cookie_manager:
-    _token_pendiente = st.session_state.pop("_refresh_token_pendiente")
-    cookie_manager.set(NOMBRE_COOKIE_SESION, _token_pendiente,
-                        expires_at=datetime.now() + timedelta(days=30), key="set_cookie_login")
-
-if st.session_state.get("_cookie_pendiente_borrar") and cookie_manager:
-    st.session_state["_cookie_pendiente_borrar"] = False
+def guardar_sesion_en_url(session):
+    """Crea una fila de sesión web (vía RPC, requiere estar recién
+    autenticado) y guarda solo su ID en la URL."""
+    if not (session and getattr(session, "refresh_token", None)):
+        return
     try:
-        cookie_manager.delete(NOMBRE_COOKIE_SESION, key="del_cookie_login")
+        res = supabase.rpc("crear_sesion_web", {"refresh_token_param": session.refresh_token, "duracion_dias": 30}).execute()
+        if res.data:
+            st.query_params[PARAM_SESION] = str(res.data)
     except Exception:
         pass
 
 
-def guardar_sesion_en_cookie(session):
-    """No escribe la cookie de inmediato: la deja pendiente para la próxima
-    ejecución del script (ver bloque arriba) — necesario para que el
-    componente de cookies tenga tiempo real de comunicarse con el navegador."""
-    if session and getattr(session, "refresh_token", None):
-        st.session_state["_refresh_token_pendiente"] = session.refresh_token
+def borrar_sesion_de_url():
+    if PARAM_SESION in st.query_params:
+        del st.query_params[PARAM_SESION]
 
 
-def borrar_cookie_sesion():
-    """Igual que guardar_sesion_en_cookie: se difiere para evitar la misma
-    condición de carrera si justo después se llama a st.rerun()."""
-    st.session_state["_cookie_pendiente_borrar"] = True
-
-
-def restaurar_sesion_desde_cookie():
-    """El componente de cookies puede tardar 1-2 ejecuciones del script en
-    sincronizarse con el navegador antes de poder leer nada (comportamiento
-    documentado) — por eso NO nos rendimos tras un solo intento con valor
-    vacío: distinguimos 'todavía no sincronizó' de 'de verdad no hay cookie'."""
-    if not (supabase and cookie_manager) or st.session_state["user"]:
-        return
-
-    todas_las_cookies = cookie_manager.get_all()
-    if todas_las_cookies is None:
-        intentos = st.session_state.get("intentos_cookie", 0)
-        if intentos < 3:
-            st.session_state["intentos_cookie"] = intentos + 1
-            st.rerun()
-        return  # se agotaron los intentos: seguir como si no hubiera sesión
-
-    if st.session_state["intento_restaurar_sesion"]:
+def restaurar_sesion_desde_url():
+    """Se ejecuta una sola vez por sesión de navegador. Si la URL trae un
+    session_id válido, lo resuelve contra la base de datos y reconstruye la
+    sesión de Supabase sin pedir contraseña."""
+    if not supabase or st.session_state["user"] or st.session_state["intento_restaurar_sesion"]:
         return
     st.session_state["intento_restaurar_sesion"] = True
 
-    refresh_token = todas_las_cookies.get(NOMBRE_COOKIE_SESION)
-    if not refresh_token:
+    session_id = st.query_params.get(PARAM_SESION)
+    if not session_id:
         return
+
     try:
-        res = supabase.auth.refresh_session(refresh_token)
-        if res and res.user:
-            st.session_state["user"] = res.user.email
-            plan, nombre_guardado, foto_guardada = get_user_plan(res.user.email)
+        res = supabase.rpc("resolver_sesion_web", {"session_id": session_id}).execute()
+        if not res.data:
+            borrar_sesion_de_url()
+            return
+        refresh_token = res.data[0]["refresh_token"]
+
+        res_auth = supabase.auth.refresh_session(refresh_token)
+        if res_auth and res_auth.user:
+            st.session_state["user"] = res_auth.user.email
+            plan, nombre_guardado, foto_guardada = get_user_plan(res_auth.user.email)
             st.session_state["plan"] = plan
-            st.session_state["nombre_usuario"] = nombre_guardado or res.user.email.split("@")[0].capitalize()
+            st.session_state["nombre_usuario"] = nombre_guardado or res_auth.user.email.split("@")[0].capitalize()
             st.session_state["foto_perfil"] = foto_guardada
-            asegurar_categorias_defecto(res.user.email)
-            guardar_sesion_en_cookie(res.session)  # Supabase rota el refresh token: guardar el nuevo
+            asegurar_categorias_defecto(res_auth.user.email)
+            guardar_sesion_en_url(res_auth.session)  # rota: la anterior ya se borró (de un solo uso), se crea una nueva
             st.rerun()
     except Exception:
-        borrar_cookie_sesion()
+        borrar_sesion_de_url()
 
 
 def get_user_plan(email):
@@ -789,23 +788,26 @@ def cargar_metas(email):
 # ============================================================
 # SIDEBAR — AUTENTICACIÓN Y PERFIL DE USUARIO
 # ============================================================
-restaurar_sesion_desde_cookie()
+restaurar_sesion_desde_url()
 
 st.sidebar.markdown("### 🌱 FinZen")
 
+st.sidebar.markdown("#### 💱 Moneda")
+moneda_nueva = st.sidebar.radio(
+    "Ver importes en",
+    ["COP", "USD"],
+    index=0 if st.session_state["moneda"] == "COP" else 1,
+    horizontal=True,
+    label_visibility="collapsed",
+)
+if moneda_nueva != st.session_state["moneda"]:
+    st.session_state["moneda"] = moneda_nueva
+    st.rerun()
+
 if tc_usd_cop:
-    st.sidebar.markdown("#### 💱 Moneda")
-    moneda_nueva = st.sidebar.radio(
-        "Ver importes en",
-        ["COP", "USD"],
-        index=0 if st.session_state["moneda"] == "COP" else 1,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    if moneda_nueva != st.session_state["moneda"]:
-        st.session_state["moneda"] = moneda_nueva
-        st.rerun()
-    st.sidebar.caption(f"1 USD ≈ {tc_usd_cop:,.2f} COP")
+    st.sidebar.caption(f"1 USD ≈ {tc_usd_cop:,.2f} COP (en vivo)")
+else:
+    st.sidebar.caption(f"⚠️ 1 USD ≈ {TASA_RESPALDO_NO_EN_VIVO:,.2f} COP (tasa de respaldo, no en vivo — no se pudo consultar la API en este momento)")
 
 if not db_connected:
     st.sidebar.warning("⚠️ Sin conexión a base de datos. Configura Supabase en Secrets.")
@@ -839,7 +841,7 @@ elif not st.session_state["user"]:
                         st.session_state["nombre_usuario"] = nombre_guardado or correo.split("@")[0].capitalize()
                         st.session_state["foto_perfil"] = foto_guardada
                         asegurar_categorias_defecto(correo)
-                        guardar_sesion_en_cookie(session_obj)
+                        guardar_sesion_en_url(session_obj)
                         st.rerun()
                     else:
                         st.sidebar.error("Credenciales inválidas.")
@@ -922,7 +924,7 @@ text-decoration:none;font-weight:700;display:block;text-align:center;margin-top:
             supabase.auth.sign_out()
         except Exception:
             pass
-        borrar_cookie_sesion()
+        borrar_sesion_de_url()
         st.session_state["user"] = None
         st.session_state["plan"] = "free"
         st.session_state["intento_restaurar_sesion"] = False
