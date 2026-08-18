@@ -276,7 +276,13 @@ def _obtener_tipo_cambio_raw():
     cop = data.get("rates", {}).get("COP")
     if not cop or float(cop) <= 0:
         raise ValueError("La API respondió sin una tasa COP válida")
-    return float(cop), "ExchangeRate-API", pd.Timestamp.now()
+    # "time_last_update_utc" es cuándo el PROVEEDOR actualizó el dato de verdad
+    # -- distinto de "ahora", que solo diría cuándo NOSOTROS lo consultamos.
+    # Esta fuente gratuita se actualiza 1 vez al día, no en tiempo real como
+    # Google Finance -- por eso puede diferir un poco del valor del momento.
+    fecha_actualizacion = data.get("time_last_update_utc")
+    fecha_parseada = pd.to_datetime(fecha_actualizacion, utc=True, errors="coerce") if fecha_actualizacion else pd.Timestamp.now()
+    return float(cop), "ExchangeRate-API", fecha_parseada
 
 
 def obtener_tipo_cambio_usd_cop():
@@ -805,9 +811,11 @@ if moneda_nueva != st.session_state["moneda"]:
     st.rerun()
 
 if tc_usd_cop:
-    st.sidebar.caption(f"1 USD ≈ {tc_usd_cop:,.2f} COP (en vivo)")
+    etiqueta_fecha = fecha_fx.strftime("%d/%m %H:%M UTC") if fecha_fx is not None and not pd.isna(fecha_fx) else "fecha no disponible"
+    st.sidebar.caption(f"1 USD ≈ {tc_usd_cop:,.2f} COP · actualizado {etiqueta_fecha}")
+    st.sidebar.caption("Fuente gratuita (ExchangeRate-API), se actualiza ~1 vez al día — no es en tiempo real como Google Finance. Para decisiones donde el centavo importe, verifica en tu banco.")
 else:
-    st.sidebar.caption(f"⚠️ 1 USD ≈ {TASA_RESPALDO_NO_EN_VIVO:,.2f} COP (tasa de respaldo, no en vivo — no se pudo consultar la API en este momento)")
+    st.sidebar.caption(f"⚠️ 1 USD ≈ {TASA_RESPALDO_NO_EN_VIVO:,.2f} COP (tasa de respaldo — no se pudo consultar la API en este momento, este valor puede estar desactualizado)")
 
 if not db_connected:
     st.sidebar.warning("⚠️ Sin conexión a base de datos. Configura Supabase en Secrets.")
